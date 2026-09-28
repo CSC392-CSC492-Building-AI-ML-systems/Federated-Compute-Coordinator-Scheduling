@@ -1,0 +1,9 @@
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+extend-exclude = ["harness"]
+
+[tool.ruff.lint]
+# E: readable basic style, F: likely Python mistakes, I: organized imports.
+# Keep the starter scaffold flexible; stricter rules can be added as the team writes code.
+select = ["E", "F", "I"]
