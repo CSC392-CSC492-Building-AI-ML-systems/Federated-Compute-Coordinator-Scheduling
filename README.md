@@ -44,6 +44,7 @@ After that, `git commit` automatically runs basic file checks plus Ruff's
 style, import-order, and formatting checks. Use `python -m pre_commit run
 --all-files` to run the same checks manually.
 
-`docs/`, `ANALYSIS.md`, and `harness/` are earlier design/reference material;
-they do not describe implemented functionality in this scaffold. The old
-implementation and its tests were archived outside the project before removal.
+`harness/` is the fake-provider harness scaffold; see `harness/README.md` for
+its layout and team split. `docs/` and `ANALYSIS.md` are earlier
+design/reference material and do not describe implemented functionality. The
+old implementation and its tests were archived outside the project before removal.

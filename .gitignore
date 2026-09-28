@@ -33,3 +33,4 @@ Thumbs.db
 docs/
 openapi.json
 harness/scenarios/*_report.json
+harness/reports/
