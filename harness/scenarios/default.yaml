@@ -1,18 +1,58 @@
-# Example scenario. The file format is a placeholder until the team agrees on it.
+# Default scenario: 5+ providers, all 7 required failure modes, one normal
+# Sample scenario placeholder for testing the harness.
 
-name: default
+coordinator_url: "http://localhost:8000"
 seed: 42
+heartbeat_interval_sec: 2
+poll_interval_sec: 1
+run_duration_sec: 45
 
 providers:
-  - provider_id: node-a100-1
+  - name: node-a100-1
     behavior: normal
-    capabilities: { gpu_model: A100, vram_mb: 40960, driver_version: "535.104", runtimes: [cuda12] }
-    accepted_tiers: [tier1, tier2]
+    capabilities: { gpu_model: A100, vram_gb: 40, driver: "535.104", runtimes: [cuda12, pytorch2] }
+    tiers: [standard, premium]
 
-  - provider_id: node-3090-drains
-    capabilities: { gpu_model: RTX3090, vram_mb: 24576, driver_version: "535.104", runtimes: [cuda12] }
-    accepted_tiers: [tier1]
+  - name: node-3090-vanishes
+    behavior: disappear
+    capabilities: { gpu_model: RTX3090, vram_gb: 24, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+    disappear_after_heartbeats: 2
+
+  - name: node-3090-drains
     behavior: drain_mid_job
+    capabilities: { gpu_model: RTX3090, vram_gb: 24, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+    meets_grace: false
+    overshoot_sec: 20
+
+  - name: node-t4-rejector
+    behavior: reject_lease
+    capabilities: { gpu_model: T4, vram_gb: 16, driver: "525.60", runtimes: [cuda11] }
+    tiers: [standard]
+
+  - name: node-liar
+    behavior: wrong_capabilities
+    capabilities: { gpu_model: RTX2060, vram_gb: 32, driver: "510.47", runtimes: [cuda11] }
+    tiers: [standard]
+
+  - name: node-t4-upload-fail
+    behavior: upload_fail
+    capabilities: { gpu_model: T4, vram_gb: 16, driver: "525.60", runtimes: [cuda12] }
+    tiers: [standard]
+
+  - name: node-a100-skewed-clock
+    behavior: clock_skew
+    capabilities: { gpu_model: A100, vram_gb: 40, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard, premium]
+    skew_seconds: 3600
+
+  - name: node-t4-disk-full
+    behavior: disk_full
+    capabilities: { gpu_model: T4, vram_gb: 16, driver: "525.60", runtimes: [cuda12] }
+    tiers: [standard]
 
 jobs:
-  - { required_vram_mb: 16384, gpu_models: [], required_runtime: cuda12, tier: tier1, max_attempts: 3 }
+  - { tier: standard, min_vram_gb: 8,  duration_sec: 4, artifact_required: true,  count: 6 }
+  - { tier: standard, min_vram_gb: 16, duration_sec: 5, artifact_required: true,  count: 3 }
+  - { tier: premium,  min_vram_gb: 32, duration_sec: 4, artifact_required: false, count: 1 }
