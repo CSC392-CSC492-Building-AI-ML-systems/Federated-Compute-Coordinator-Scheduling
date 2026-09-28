@@ -1,0 +1,35 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local environment files
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Packaging and test output
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
+coverage.xml
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local generated artifacts and private design documents
+docs/
+openapi.json
+harness/scenarios/*_report.json
