@@ -1,5 +1,5 @@
 # Default scenario: 5+ providers, all 7 required failure modes, one normal
-# node as a control. Deterministic (fixed seed) so reruns are comparable.
+# Sample scenario placeholder for testing the harness.
 
 coordinator_url: "http://localhost:8000"
 seed: 42
