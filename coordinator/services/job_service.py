@@ -5,10 +5,18 @@ from coordinator.models.job import Job, JobSubmitRequest, JobStatus
 from coordinator.store import Store
 import uuid
 
+
+class JobNotFound(Exception):
+    """
+    The requested job_id is not registered
+    """
+    pass
+
+
 async def submit_job(store: Store, request: JobSubmitRequest, received_at: datetime) -> Job:
-    """Create a queued job and return a copy of the stored record.
-       
-       received_at is the Coordinator's receive time, passed in by the caller.
+    """
+    Create a queued job and return a copy of the stored record.
+    received_at is the Coordinator's receive time, passed in by the caller.
     """
 
     # Create the new Job
@@ -26,7 +34,19 @@ async def submit_job(store: Store, request: JobSubmitRequest, received_at: datet
     async with store.lock:
         store.jobs[new_job.job_id] = new_job
         return new_job.model_copy(deep=True)
+
+
         
+async def get_job(store: Store, job_id: str) -> Job:
+    """
+    Fetches the Job with job_id inside the store, if it exists
+    """
+    async with store.lock:
+        if job_id in store.jobs:
+           return store.jobs[job_id].model_copy(deep=True)
+        else:
+            raise JobNotFound(f"Job '{job_id}' not found")
+
 
 
 
