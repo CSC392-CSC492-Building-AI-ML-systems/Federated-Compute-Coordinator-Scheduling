@@ -1,15 +1,17 @@
 """Job use cases. Names and signatures are placeholders for team design."""
 
-from datetime import datetime
-from coordinator.models.job import Job, JobSubmitRequest, JobStatus
-from coordinator.store import Store
 import uuid
+from datetime import datetime
+
+from coordinator.models.job import Job, JobStatus, JobSubmitRequest
+from coordinator.store import Store
 
 
 class JobNotFound(Exception):
     """
     The requested job_id is not registered
     """
+
     pass
 
 
@@ -36,14 +38,14 @@ async def submit_job(store: Store, request: JobSubmitRequest, received_at: datet
         return new_job.model_copy(deep=True)
 
 
-        
+
 async def get_job(store: Store, job_id: str) -> Job:
     """
     Fetches the Job with job_id inside the store, if it exists
     """
     async with store.lock:
         if job_id in store.jobs:
-           return store.jobs[job_id].model_copy(deep=True)
+            return store.jobs[job_id].model_copy(deep=True)
         else:
             raise JobNotFound(f"Job '{job_id}' not found")
 
@@ -54,4 +56,4 @@ async def get_job(store: Store, job_id: str) -> Job:
 
 
 
-    
+

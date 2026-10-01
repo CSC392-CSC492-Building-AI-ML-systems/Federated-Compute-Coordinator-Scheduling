@@ -1,10 +1,11 @@
 """Jobs HTTP routes: validate input, call services, return responses."""
 from datetime import datetime
+
 from fastapi import APIRouter, Depends
 
 from coordinator.api.tools.dependencies import get_received_at, get_store
 from coordinator.api.tools.errors import ApiError
-from coordinator.models.job import JobSubmitRequest, Job
+from coordinator.models.job import Job, JobSubmitRequest
 from coordinator.services import job_service
 from coordinator.store import Store
 
@@ -16,8 +17,8 @@ router = APIRouter()
 # 201 Created
 @router.post("/jobs", status_code=201, response_model=Job)
 async def submit_job(
-    payload: JobSubmitRequest, 
-    store: Store = Depends(get_store), 
+    payload: JobSubmitRequest,
+    store: Store = Depends(get_store),
     received_at: datetime = Depends(get_received_at)):
     """
     Endpoint to submit a new job to the coordinator
@@ -37,6 +38,3 @@ async def get_job(
         return await job_service.get_job(store, job_id)
     except job_service.JobNotFound as exc:
         raise ApiError(404, "JOB_NOT_FOUND", str(exc)) from exc
-
-
-
