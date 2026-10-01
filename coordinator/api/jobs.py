@@ -1,4 +1,5 @@
 """Jobs HTTP routes: validate input, call services, return responses."""
+
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
@@ -14,23 +15,24 @@ router = APIRouter()
 # TODO: Define endpoints and request/response models.
 # Keep state changes in services, not in route handlers.
 
+
 # 201 Created
 @router.post("/jobs", status_code=201, response_model=Job)
 async def submit_job(
     payload: JobSubmitRequest,
     store: Store = Depends(get_store),
-    received_at: datetime = Depends(get_received_at)):
+    received_at: datetime = Depends(get_received_at),
+):
     """
     Endpoint to submit a new job to the coordinator
     """
     job = await job_service.submit_job(store, payload, received_at)
     return job
 
+
 # 200 Created
 @router.get("/jobs/{job_id}", status_code=200, response_model=Job)
-async def get_job(
-    job_id: str,
-    store: Store = Depends(get_store)):
+async def get_job(job_id: str, store: Store = Depends(get_store)):
     """
     Endpoint to obtain a job with the requested job_id, if it exists.
     """

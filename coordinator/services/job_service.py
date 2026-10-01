@@ -38,7 +38,6 @@ async def submit_job(store: Store, request: JobSubmitRequest, received_at: datet
         return new_job.model_copy(deep=True)
 
 
-
 async def get_job(store: Store, job_id: str) -> Job:
     """
     Fetches the Job with job_id inside the store, if it exists
@@ -48,12 +47,3 @@ async def get_job(store: Store, job_id: str) -> Job:
             return store.jobs[job_id].model_copy(deep=True)
         else:
             raise JobNotFound(f"Job '{job_id}' not found")
-
-
-
-
-
-
-
-
-
