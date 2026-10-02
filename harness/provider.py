@@ -17,7 +17,6 @@ HEARTBEAT_INTERVAL_SEC = 1
 
 
 class FakeProvider:
-    # TODO: Agree on constructor inputs (spec, client, behavior, params).
     def __init__(
         self,
         client,
