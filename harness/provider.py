@@ -47,6 +47,8 @@ class FakeProvider:
         # We can make this be the current time of the provider + the job duration
         self.job_finishes_at = None
         self.events = []
+        # Status last reported by the coordinator in respect to this provider
+        self.status = None
 
     async def register(self, now):
         response = await self.client.register_provider(
@@ -56,8 +58,9 @@ class FakeProvider:
                 "accepted_tiers": self.accepted_tiers,
             }
         )
+        self.status = response["status"]
         self.is_heartbeating = True
-        self.log_event(now, "registered", status=response["status"])
+        self.log_event(now, "registered", status=self.status)
 
     async def tick(self, now):
         """One tick: heartbeat, then take an offer or finish the current job."""
@@ -70,8 +73,9 @@ class FakeProvider:
             await self.finish_job(now)
 
     async def heartbeat(self, now):
-        await self.client.heartbeat(self.provider_id)
-        self.log_event(now, "heartbeat")
+        response = await self.client.heartbeat(self.provider_id)
+        self.status = response["status"]
+        self.log_event(now, "heartbeat", status=self.status)
 
     async def check_offers(self, now):
         offers = await self.client.get_lease_offers(self.provider_id)
