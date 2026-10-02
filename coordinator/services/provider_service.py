@@ -63,16 +63,25 @@ async def expire_heartbeats(store: Store, now: datetime, timeout_seconds: float)
     async with store.lock:
         expired_provider_ids = set()
         for provider in store.providers.values():
-            if ( provider.status in (ProviderStatus.DRAINING, ProviderStatus.ACTIVE) and (now - provider.last_heartbeat_at).total_seconds() > timeout_seconds ):
-                provider.status = ( ProviderStatus.STALE if provider.status == ProviderStatus.ACTIVE else ProviderStatus.DRAINED )
+            if (
+                provider.status in (ProviderStatus.DRAINING, ProviderStatus.ACTIVE)
+                and (now - provider.last_heartbeat_at).total_seconds() > timeout_seconds
+            ):
+                provider.status = (
+                    ProviderStatus.STALE
+                    if provider.status == ProviderStatus.ACTIVE
+                    else ProviderStatus.DRAINED
+                )
                 expired_provider_ids.add(provider.provider_id)
 
         if not expired_provider_ids:
             return
 
-
         for lease in store.leases.values():
-            if lease.provider_id in expired_provider_ids and lease.status in (LeaseStatus.OFFERED, LeaseStatus.ACTIVE, ):
+            if lease.provider_id in expired_provider_ids and lease.status in (
+                LeaseStatus.OFFERED,
+                LeaseStatus.ACTIVE,
+            ):
                 lease.status = LeaseStatus.REVOKED
                 lease.reason = InternalReason.PROVIDER_STALE.value
                 job = store.jobs[lease.job_id]
