@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from coordinator.models.lease import TERMINAL_LEASE_STATUSES
 from coordinator.models.provider import Provider, ProviderRegisterRequest, ProviderStatus
 from coordinator.store import Store
 
@@ -61,10 +62,31 @@ async def expire_heartbeats(store: Store, now: datetime, timeout_seconds: float)
     return None
 
 
+def _has_live_lease(store: Store, provider_id: str) -> bool:
+    # Caller holds store.lock.
+    for lease in store.leases.values():
+        if lease.provider_id == provider_id and lease.status not in TERMINAL_LEASE_STATUSES:
+            return True
+    return False
+
+
 async def finish_drains(store: Store, now: datetime) -> None:
     """Monitor check: DRAINING Providers with no live Lease, or past drain_deadline.
-
     DRAINING -> DRAINED. Later: reclaim remaining Leases with reason DRAIN_RECLAIM.
+
+    In other words, check draining -> drain or continue
     """
-    # TODO(Jacky): implement under store.lock. Called by monitor.run_monitor_tick.
-    return None
+    async with store.lock:
+        for provider in store.providers.values():
+            if provider.status != ProviderStatus.DRAINING:
+                continue
+
+            if provider.drain_deadline is not None:
+                past_deadline = now >= provider.drain_deadline
+
+                if _has_live_lease(store, provider.provider_id) and not past_deadline:
+                    continue
+
+            # TODO: when past_deadline, revoke remaining Leases (DRAIN_RECLAIM)
+            # and send their Jobs to the retry check before marking DRAINEDD. =)
+            provider.status = ProviderStatus.DRAINED
