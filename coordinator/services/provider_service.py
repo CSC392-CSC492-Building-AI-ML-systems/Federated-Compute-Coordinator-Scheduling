@@ -2,8 +2,7 @@
 
 from datetime import datetime
 
-from coordinator.models.job import JobStatus
-from coordinator.models.lease import InternalReason, LeaseStatus
+from coordinator.models.lease import TERMINAL_LEASE_STATUSES
 from coordinator.models.provider import Provider, ProviderRegisterRequest, ProviderStatus
 from coordinator.store import Store
 
@@ -57,45 +56,37 @@ async def expire_heartbeats(store: Store, now: datetime, timeout_seconds: float)
     """Monitor check: Providers whose last heartbeat is older than the timeout.
 
     ACTIVE -> STALE; DRAINING -> DRAINED (new rule, see docs/provider-tasks).
-    Revoke live Leases with reason PROVIDER_STALE and requeue their current Jobs.
-    Requeueing leaves attempt_count unchanged; retry budgets are not implemented.
+    Later: also revoke their Leases with reason PROVIDER_STALE.
     """
-    async with store.lock:
-        expired_provider_ids = set()
-        for provider in store.providers.values():
-            if (
-                provider.status in (ProviderStatus.DRAINING, ProviderStatus.ACTIVE)
-                and (now - provider.last_heartbeat_at).total_seconds() > timeout_seconds
-            ):
-                provider.status = (
-                    ProviderStatus.STALE
-                    if provider.status == ProviderStatus.ACTIVE
-                    else ProviderStatus.DRAINED
-                )
-                expired_provider_ids.add(provider.provider_id)
+    # TODO(Jingcheng): implement under store.lock. Called by monitor.run_monitor_tick.
+    return None
 
-        if not expired_provider_ids:
-            return
 
-        for lease in store.leases.values():
-            if lease.provider_id in expired_provider_ids and lease.status in (
-                LeaseStatus.OFFERED,
-                LeaseStatus.ACTIVE,
-            ):
-                lease.status = LeaseStatus.REVOKED
-                lease.reason = InternalReason.PROVIDER_STALE.value
-                job = store.jobs[lease.job_id]
-                if job.current_lease_id == lease.lease_id:
-                    job.current_lease_id = None
-                    if job.status in (JobStatus.STARTING, JobStatus.RUNNING):
-                        job.last_failure_reason = lease.reason
-                        job.status = JobStatus.QUEUED
+def _has_live_lease(store: Store, provider_id: str) -> bool:
+    # Caller holds store.lock.
+    for lease in store.leases.values():
+        if lease.provider_id == provider_id and lease.status not in TERMINAL_LEASE_STATUSES:
+            return True
+    return False
 
 
 async def finish_drains(store: Store, now: datetime) -> None:
     """Monitor check: DRAINING Providers with no live Lease, or past drain_deadline.
-
     DRAINING -> DRAINED. Later: reclaim remaining Leases with reason DRAIN_RECLAIM.
+
+    In other words, check draining -> drain or continue
     """
-    # TODO(Jacky): implement under store.lock. Called by monitor.run_monitor_tick.
-    return None
+    async with store.lock:
+        for provider in store.providers.values():
+            if provider.status != ProviderStatus.DRAINING:
+                continue
+
+            if provider.drain_deadline is not None:
+                past_deadline = now >= provider.drain_deadline
+
+                if _has_live_lease(store, provider.provider_id) and not past_deadline:
+                    continue
+
+            # TODO: when past_deadline, revoke remaining Leases (DRAIN_RECLAIM)
+            # and send their Jobs to the retry check before marking DRAINEDD. =)
+            provider.status = ProviderStatus.DRAINED
