@@ -49,3 +49,22 @@ async def register_provider(
 async def heartbeat(provider_id):
     """Record a provider heartbeat."""
     raise NotImplementedError("Team implementation pending")
+
+
+async def expire_heartbeats(store: Store, now: datetime, timeout_seconds: float) -> None:
+    """Monitor check: Providers whose last heartbeat is older than the timeout.
+
+    ACTIVE -> STALE; DRAINING -> DRAINED (new rule, see docs/provider-tasks).
+    Later: also revoke their Leases with reason PROVIDER_STALE.
+    """
+    # TODO(Jingcheng): implement under store.lock. Called by monitor.run_monitor_tick.
+    return None
+
+
+async def finish_drains(store: Store, now: datetime) -> None:
+    """Monitor check: DRAINING Providers with no live Lease, or past drain_deadline.
+
+    DRAINING -> DRAINED. Later: reclaim remaining Leases with reason DRAIN_RECLAIM.
+    """
+    # TODO(Jacky): implement under store.lock. Called by monitor.run_monitor_tick.
+    return None

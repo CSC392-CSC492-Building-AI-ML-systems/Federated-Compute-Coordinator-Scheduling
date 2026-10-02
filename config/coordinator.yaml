@@ -1,0 +1,8 @@
+# Coordinator settings. Values are proposals; change them here, not in code.
+# Loaded by coordinator/settings.py at startup.
+
+# A Provider with no heartbeat for this long is considered unreachable.
+heartbeat_timeout_seconds: 15
+
+# How often the monitor checks deadlines.
+monitor_interval_seconds: 1

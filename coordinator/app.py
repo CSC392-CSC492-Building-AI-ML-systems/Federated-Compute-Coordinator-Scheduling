@@ -1,13 +1,16 @@
 """Wire the application together."""
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, Optional
 
 from fastapi import FastAPI
 
 from coordinator.api import jobs, leases, providers, status
 from coordinator.api.tools.errors import install_error_handlers
+from coordinator.monitor import monitor_loop
+from coordinator.settings import Settings, load_settings
 from coordinator.store import Store
 
 
@@ -15,8 +18,12 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def create_app(clock: Callable[[], datetime] = utc_now) -> FastAPI:
-    """Build an app with its own Store. Tests pass a fixed clock for exact timestamps."""
+def create_app(
+    clock: Callable[[], datetime] = utc_now, settings: Optional[Settings] = None
+) -> FastAPI:
+    """Build an app with its own Store. Settings come from config/coordinator.yaml
+    unless a test passes its own."""
+    settings = settings or load_settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -24,8 +31,21 @@ def create_app(clock: Callable[[], datetime] = utc_now) -> FastAPI:
         # belongs to the loop that serves requests.
         app.state.store = Store()
         app.state.clock = clock
+        app.state.settings = settings
+        app.state.monitor_task = None
+
+        # IMPORTANT: monitor =)
+        app.state.monitor_task = asyncio.create_task(monitor_loop(app.state.store, clock, settings))
+
         yield
-        # TODO: Start and stop the monitor when the team implements background work.
+
+        # Stop the monitor on shutdown so it does not outlive the app.
+        if app.state.monitor_task is not None:
+            app.state.monitor_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await app.state.monitor_task
+
+        # TODO: start and stop the scheduler the same way once it exists.
 
     app = FastAPI(title="Project 16 =)", lifespan=lifespan)
     for router in (providers.router, jobs.router, leases.router, status.router):
