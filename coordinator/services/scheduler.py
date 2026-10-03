@@ -1,4 +1,5 @@
-""" The Job Scheduler. Orchestrates the creation of OFFERED leases between QUEUED jobs and ACTIVE providers."""
+"""The Job Scheduler. Orchestrates the creation of OFFERED leases
+between QUEUED jobs and ACTIVE providers."""
 
 import uuid
 from fastapi import Depends
@@ -9,7 +10,6 @@ from coordinator.services.lease_service import create_lease
 from coordinator.policies.matching import can_run
 
 
-
 async def run_matching(store: Store = Depends(get_store)):
     """
     Iterates through all QUEUED jobs and attempts to find
@@ -17,7 +17,6 @@ async def run_matching(store: Store = Depends(get_store)):
     """
     assigned_providers = set()
     async with store.lock:
-
         for job in store.jobs.values():
             if job.status != JobStatus.QUEUED or job.current_lease_id is not None:
                 continue
