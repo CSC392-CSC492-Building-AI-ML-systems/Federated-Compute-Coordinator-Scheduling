@@ -1,13 +1,13 @@
 """The Job Scheduler. Orchestrates the creation of OFFERED leases
 between QUEUED jobs and ACTIVE providers."""
 
-import uuid
 from fastapi import Depends
+
 from coordinator.api.tools.dependencies import get_store
-from coordinator.store import Store
 from coordinator.models.job import JobStatus
-from coordinator.services.lease_service import create_lease
 from coordinator.policies.matching import can_run
+from coordinator.services.lease_service import create_lease
+from coordinator.store import Store
 
 
 async def run_matching(store: Store = Depends(get_store)):
