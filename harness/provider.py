@@ -7,6 +7,8 @@ branches on `behavior` and calls the matching function in harness.behaviors.
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+from harness.errors import CoordinatorError
+
 # Can remove this if we decide to have the duration of the job directly
 # tied to the job as an attribute
 DEFAULT_JOB_DURATION_SEC = 4
@@ -50,29 +52,61 @@ class FakeProvider:
         self.status = None
 
     async def register(self, now):
-        response = await self.client.register_provider(
-            {
-                "provider_id": self.provider_id,
-                "capabilities": self.capabilities,
-                "accepted_tiers": self.accepted_tiers,
-            }
-        )
+        try:
+            response = await self.client.register_provider(
+                {
+                    "provider_id": self.provider_id,
+                    "capabilities": self.capabilities,
+                    "accepted_tiers": self.accepted_tiers,
+                }
+            )
+        except CoordinatorError as error:
+            self.log_error(now, error)
+            return
         self.status = response["status"]
         self.is_heartbeating = True
         self.log_event(now, "registered", status=self.status)
+
+    async def drain(self, now, grace_period_seconds):
+        """Commences a drain. Tries to finish the current job in the grace period,
+        takes no new ones, then stops heartbeating once drained."""
+        try:
+            response = await self.client.drain(self.provider_id, grace_period_seconds)
+        except CoordinatorError as error:
+            self.log_error(now, error)
+            return
+        self.status = response["status"]
+        self.log_event(
+            now, "drain_started", status=self.status, grace_period_seconds=grace_period_seconds
+        )
 
     async def tick(self, now):
         """One tick: heartbeat, then take an offer or finish the current job."""
         if not self.is_heartbeating:
             return
-        await self.heartbeat(now)
-        if self.lease_id is None:
-            await self.check_offers(now)
-        elif now >= self.job_finishes_at:
-            await self.finish_job(now)
+        try:
+            await self.heartbeat(now)
+            if self.lease_id is None:
+                if self.status == "ACTIVE":
+                    await self.check_offers(now)
+            elif now >= self.job_finishes_at:
+                await self.finish_job(now)
+        except CoordinatorError as error:
+            self.log_error(now, error)
 
+    # Handle the DRAINING status and stop heartbeating
+    # once drained. We know the drain has completed when
+    # a heartbeat gets a 409 while DRAINING.
+    # Other 409 sources shouldn't stop the heartbeating.
     async def heartbeat(self, now):
-        response = await self.client.heartbeat(self.provider_id)
+        try:
+            response = await self.client.heartbeat(self.provider_id)
+        except CoordinatorError as error:
+            if self.status == "DRAINING" and error.status_code == 409:
+                self.status = "DRAINED"
+                self.is_heartbeating = False
+                self.log_event(now, "drained")
+            raise
         self.status = response["status"]
         self.log_event(now, "heartbeat", status=self.status)
 
@@ -96,9 +130,14 @@ class FakeProvider:
 
     async def finish_job(self, now):
         """Report completion of the lease and become ready to accept another one."""
-        await self.client.report(self.lease_id, self.provider_id, "SUCCESS")
-        self.log_event(now, "reported", lease_id=self.lease_id, outcome="SUCCESS")
+        temp_lease_id = self.lease_id
         self.lease_id = None
+        await self.client.report(temp_lease_id, self.provider_id, "SUCCESS")
+        self.log_event(now, "reported", lease_id=temp_lease_id, outcome="SUCCESS")
+
+    def log_error(self, now, error):
+        """Log a request the coordinator rejected, instead of crashing the run."""
+        self.log_event(now, "request_failed", http_status=error.status_code, code=error.code)
 
     def log_event(self, now, event, **details):
         """Log events, including accepting a lease, finishing a job, and heartbeating"""
