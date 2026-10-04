@@ -7,6 +7,8 @@ branches on `behavior` and calls the matching function in harness.behaviors.
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import httpx
+
 from harness.errors import CoordinatorError
 
 # Can remove this if we decide to have the duration of the job directly
@@ -63,6 +65,9 @@ class FakeProvider:
         except CoordinatorError as error:
             self.log_error(now, error)
             return
+        except httpx.TransportError as error:
+            self.log_network_error(now, error)
+            return
         self.status = response["status"]
         self.is_heartbeating = True
         self.log_event(now, "registered", status=self.status)
@@ -74,6 +79,9 @@ class FakeProvider:
             response = await self.client.drain(self.provider_id, grace_period_seconds)
         except CoordinatorError as error:
             self.log_error(now, error)
+            return
+        except httpx.TransportError as error:
+            self.log_network_error(now, error)
             return
         self.status = response["status"]
         self.log_event(
@@ -93,6 +101,9 @@ class FakeProvider:
                 await self.finish_job(now)
         except CoordinatorError as error:
             self.log_error(now, error)
+        except httpx.TransportError as error:
+            # Coordinator slow or unreachable (e.g. past hardcoded timout), keep running and retry next tick.
+            self.log_network_error(now, error)
 
     # Handle the DRAINING status and stop heartbeating
     # once drained. We know the drain has completed when
@@ -100,7 +111,7 @@ class FakeProvider:
     # Other 409 sources shouldn't stop the heartbeating.
     async def heartbeat(self, now):
         try:
-            response = await self.client.heartbeat(self.provider_id)
+            response = await self.client.heartbeat(self.provider_id, now.isoformat())
         except CoordinatorError as error:
             if self.status == "DRAINING" and error.status_code == 409:
                 self.status = "DRAINED"
@@ -117,16 +128,18 @@ class FakeProvider:
         # MVP: at most one live lease per provider, so take the first offer.
         offer = offers[0]
         lease_id = offer["lease_id"]
-        await self.client.accept(lease_id, self.provider_id)
-        # SUCCESS can only occur when the job is in the RUNNING state
-        await self.client.started(lease_id, self.provider_id)
         # TODO: The job itself is the sleep, but right now this
         # just assigns 4 seconds to all of them. This will probably change once job.py
         # or something of the sort is written.
         duration = offer.get("duration_sec", DEFAULT_JOB_DURATION_SEC)
+        await self.client.accept(lease_id, self.provider_id)
+        # Track the lease as soon as it is accepted, so a failed `started` call
+        # does not leave the coordinator holding a lease this provider forgot.
         self.lease_id = lease_id
         self.job_finishes_at = now + timedelta(seconds=duration)
         self.log_event(now, "accepted", lease_id=lease_id, job_id=offer["job_id"])
+        # SUCCESS can only occur when the job is in the RUNNING state
+        await self.client.started(lease_id, self.provider_id)
 
     async def finish_job(self, now):
         """Report completion of the lease and become ready to accept another one."""
@@ -138,6 +151,10 @@ class FakeProvider:
     def log_error(self, now, error):
         """Log a request the coordinator rejected, instead of crashing the run."""
         self.log_event(now, "request_failed", http_status=error.status_code, code=error.code)
+
+    def log_network_error(self, now, error):
+        """Log a request that never got a response (timeout, connection refused)."""
+        self.log_event(now, "network_error", error=type(error).__name__)
 
     def log_event(self, now, event, **details):
         """Log events, including accepting a lease, finishing a job, and heartbeating"""
