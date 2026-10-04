@@ -7,6 +7,10 @@ branches on `behavior` and calls the matching function in harness.behaviors.
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import httpx
+
+from harness.errors import CoordinatorError
+
 # Can remove this if we decide to have the duration of the job directly
 # tied to the job as an attribute
 DEFAULT_JOB_DURATION_SEC = 4
@@ -50,29 +54,71 @@ class FakeProvider:
         self.status = None
 
     async def register(self, now):
-        response = await self.client.register_provider(
-            {
-                "provider_id": self.provider_id,
-                "capabilities": self.capabilities,
-                "accepted_tiers": self.accepted_tiers,
-            }
-        )
+        try:
+            response = await self.client.register_provider(
+                {
+                    "provider_id": self.provider_id,
+                    "capabilities": self.capabilities,
+                    "accepted_tiers": self.accepted_tiers,
+                }
+            )
+        except CoordinatorError as error:
+            self.log_error(now, error)
+            return
+        except httpx.TransportError as error:
+            self.log_network_error(now, error)
+            return
         self.status = response["status"]
         self.is_heartbeating = True
         self.log_event(now, "registered", status=self.status)
+
+    async def drain(self, now, grace_period_seconds):
+        """Commences a drain. Tries to finish the current job in the grace period,
+        takes no new ones, then stops heartbeating once drained."""
+        try:
+            response = await self.client.drain(self.provider_id, grace_period_seconds)
+        except CoordinatorError as error:
+            self.log_error(now, error)
+            return
+        except httpx.TransportError as error:
+            self.log_network_error(now, error)
+            return
+        self.status = response["status"]
+        self.log_event(
+            now, "drain_started", status=self.status, grace_period_seconds=grace_period_seconds
+        )
 
     async def tick(self, now):
         """One tick: heartbeat, then take an offer or finish the current job."""
         if not self.is_heartbeating:
             return
-        await self.heartbeat(now)
-        if self.lease_id is None:
-            await self.check_offers(now)
-        elif now >= self.job_finishes_at:
-            await self.finish_job(now)
+        try:
+            await self.heartbeat(now)
+            if self.lease_id is None:
+                if self.status == "ACTIVE":
+                    await self.check_offers(now)
+            elif now >= self.job_finishes_at:
+                await self.finish_job(now)
+        except CoordinatorError as error:
+            self.log_error(now, error)
+        except httpx.TransportError as error:
+            # Coordinator slow or unreachable (e.g. past the client's timeout):
+            # keep running and retry next tick.
+            self.log_network_error(now, error)
 
+    # Handle the DRAINING status and stop heartbeating
+    # once drained. We know the drain has completed when
+    # a heartbeat gets a 409 while DRAINING.
+    # Other 409 sources shouldn't stop the heartbeating.
     async def heartbeat(self, now):
-        response = await self.client.heartbeat(self.provider_id)
+        try:
+            response = await self.client.heartbeat(self.provider_id, now.isoformat())
+        except CoordinatorError as error:
+            if self.status == "DRAINING" and error.status_code == 409:
+                self.status = "DRAINED"
+                self.is_heartbeating = False
+                self.log_event(now, "drained")
+            raise
         self.status = response["status"]
         self.log_event(now, "heartbeat", status=self.status)
 
@@ -83,22 +129,33 @@ class FakeProvider:
         # MVP: at most one live lease per provider, so take the first offer.
         offer = offers[0]
         lease_id = offer["lease_id"]
-        await self.client.accept(lease_id, self.provider_id)
-        # SUCCESS can only occur when the job is in the RUNNING state
-        await self.client.started(lease_id, self.provider_id)
         # TODO: The job itself is the sleep, but right now this
         # just assigns 4 seconds to all of them. This will probably change once job.py
         # or something of the sort is written.
         duration = offer.get("duration_sec", DEFAULT_JOB_DURATION_SEC)
+        await self.client.accept(lease_id, self.provider_id)
+        # Track the lease as soon as it is accepted, so a failed `started` call
+        # does not leave the coordinator holding a lease this provider forgot.
         self.lease_id = lease_id
         self.job_finishes_at = now + timedelta(seconds=duration)
         self.log_event(now, "accepted", lease_id=lease_id, job_id=offer["job_id"])
+        # SUCCESS can only occur when the job is in the RUNNING state
+        await self.client.started(lease_id, self.provider_id)
 
     async def finish_job(self, now):
         """Report completion of the lease and become ready to accept another one."""
-        await self.client.report(self.lease_id, self.provider_id, "SUCCESS")
-        self.log_event(now, "reported", lease_id=self.lease_id, outcome="SUCCESS")
+        temp_lease_id = self.lease_id
         self.lease_id = None
+        await self.client.report(temp_lease_id, self.provider_id, "SUCCESS")
+        self.log_event(now, "reported", lease_id=temp_lease_id, outcome="SUCCESS")
+
+    def log_error(self, now, error):
+        """Log a request the coordinator rejected, instead of crashing the run."""
+        self.log_event(now, "request_failed", http_status=error.status_code, code=error.code)
+
+    def log_network_error(self, now, error):
+        """Log a request that never got a response (timeout, connection refused)."""
+        self.log_event(now, "network_error", error=type(error).__name__)
 
     def log_event(self, now, event, **details):
         """Log events, including accepting a lease, finishing a job, and heartbeating"""
