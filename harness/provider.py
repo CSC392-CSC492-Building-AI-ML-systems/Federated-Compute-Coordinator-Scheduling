@@ -102,7 +102,8 @@ class FakeProvider:
         except CoordinatorError as error:
             self.log_error(now, error)
         except httpx.TransportError as error:
-            # Coordinator slow or unreachable (e.g. past hardcoded timout), keep running and retry next tick.
+            # Coordinator slow or unreachable (e.g. past the client's timeout):
+            # keep running and retry next tick.
             self.log_network_error(now, error)
 
     # Handle the DRAINING status and stop heartbeating
