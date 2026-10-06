@@ -18,15 +18,15 @@ def can_run(provider, job):
         return False
 
     # Provider must not be in the job's rejected list
-    if provider.id in job.rejected_provider_ids:
+    if provider.provider_id in job.rejected_provider_ids:
         return False
 
     # Provider VRAM must meet or exceed the requirement
-    if provider.vram_mb < job.required_vram_mb:
+    if provider.capabilities.vram_mb < job.required_vram_mb:
         return False
 
     # Job's required runtime must be supported by the provider
-    if job.required_runtime not in provider.runtimes:
+    if job.required_runtime not in provider.capabilities.runtimes:
         return False
 
     # 7. Job's tier must be accepted by the provider
@@ -34,7 +34,7 @@ def can_run(provider, job):
         return False
 
     # GPU model match: Job allows any (empty) OR provider's model is in the list
-    if job.gpu_models and provider.gpu_model not in job.gpu_models:
+    if job.gpu_models and provider.capabilities.gpu_model not in job.gpu_models:
         return False
 
     return True
