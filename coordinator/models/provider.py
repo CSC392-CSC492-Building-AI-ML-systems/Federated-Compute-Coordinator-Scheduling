@@ -50,6 +50,14 @@ class ProviderRegisterRequest(BaseModel):
     accepted_tiers: list[str]
 
 
+class HeartbeatRequest(BaseModel):
+    """Optional client time for logging; never used as the Coordinator's clock."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_time: Optional[datetime] = None
+
+
 class DrainRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -83,3 +91,11 @@ class ProviderRegisterResponse(BaseModel):
     status: ProviderStatus
     registered_at: datetime
     last_heartbeat_at: datetime
+
+
+class HeartbeatResponse(BaseModel):
+    """Body of the 200 response to POST /providers/{provider_id}/heartbeat."""
+
+    provider_id: str
+    status: ProviderStatus
+    server_received_at: datetime

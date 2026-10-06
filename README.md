@@ -1,8 +1,8 @@
 # Coordinator architecture skeleton
 
-**This is a team design scaffold, not a working backend.** Business operations
-raise `NotImplementedError`; model classes are placeholders. Function names
-and signatures are examples to discuss, not a finalized API contract.
+**This is a team design scaffold with partially implemented behavior.** Several
+business operations still raise `NotImplementedError`. Models and service
+contracts continue to evolve as the team implements features.
 
 | Location | Responsibility |
 | --- | --- |
@@ -20,8 +20,15 @@ policies to make decisions. An update involving a Job, Lease, and Provider
 should share one atomic boundary; the team will implement that boundary.
 
 Start reading with `api/providers.py` and `services/provider_service.py`.
-Leave business rules, data fields, authentication, and lifecycle details for
-team implementation. No business endpoints or background loops are wired yet.
+Leave remaining business rules, authentication, and lifecycle details for team
+implementation. Provider registration and the monitor are wired. The heartbeat
+API scaffold is wired, with its service implementation still pending.
+
+`POST /providers/{provider_id}/heartbeat` accepts an optional JSON body containing
+`provider_time` for logging. The route passes the Coordinator's receive time to
+the service and maps its not-found/drained exceptions to 404/409. Implement
+`services/provider_service.py::heartbeat` before using this endpoint with real
+Providers; API tests currently replace that service with a fake.
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -29,7 +36,7 @@ python -m pytest tests/ -v
 uvicorn coordinator.app:app --reload
 ```
 
-The server currently provides only FastAPI's documentation routes. CI runs
+The server exposes wired routes and FastAPI's documentation. CI runs
 skeleton import/layout checks and pre-commit style checks when a PR opens, reopens, or receives commits.
 A green check means the scaffold is intact, **not that backend features work**.
 Add behavior tests as the team implements each feature.

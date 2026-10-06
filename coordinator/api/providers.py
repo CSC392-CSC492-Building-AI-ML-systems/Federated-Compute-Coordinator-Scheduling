@@ -1,12 +1,18 @@
 """Providers HTTP routes: validate input, call services, return responses."""
 
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 
 from coordinator.api.tools.dependencies import get_received_at, get_store
 from coordinator.api.tools.errors import ApiError
-from coordinator.models.provider import ProviderRegisterRequest, ProviderRegisterResponse
+from coordinator.models.provider import (
+    HeartbeatRequest,
+    HeartbeatResponse,
+    ProviderRegisterRequest,
+    ProviderRegisterResponse,
+)
 from coordinator.services import provider_service
 from coordinator.store import Store
 
@@ -29,3 +35,28 @@ async def register_provider(
         # conflict == 409
         raise ApiError(409, "DUPLICATE_ID", str(exc)) from exc
     return ProviderRegisterResponse.model_validate(provider.model_dump())
+
+
+@router.post(
+    "/providers/{provider_id}/heartbeat", status_code=200, response_model=HeartbeatResponse
+)
+async def heartbeat(
+    provider_id: str,
+    body: Optional[HeartbeatRequest] = None,
+    store: Store = Depends(get_store),
+    received_at: datetime = Depends(get_received_at),
+):
+    """Receive a heartbeat; the service owns time updates and state transitions."""
+    try:
+        provider = await provider_service.heartbeat(
+            store, provider_id, body if body is not None else HeartbeatRequest(), received_at
+        )
+    except provider_service.ProviderNotFound as exc:
+        raise ApiError(404, "NOT_FOUND", str(exc)) from exc
+    except provider_service.ProviderDrained as exc:
+        raise ApiError(409, "INVALID_STATE_TRANSITION", str(exc)) from exc
+    return HeartbeatResponse(
+        provider_id=provider.provider_id,
+        status=provider.status,
+        server_received_at=received_at,
+    )
