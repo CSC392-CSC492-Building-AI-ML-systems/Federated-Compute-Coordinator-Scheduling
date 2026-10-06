@@ -1,10 +1,13 @@
-"""Provider use cases. Names and signatures are placeholders for team design."""
-
 from datetime import datetime
 
 from coordinator.models.job import JobStatus
 from coordinator.models.lease import TERMINAL_LEASE_STATUSES, InternalReason, LeaseStatus
-from coordinator.models.provider import Provider, ProviderRegisterRequest, ProviderStatus
+from coordinator.models.provider import (
+    HeartbeatRequest,
+    Provider,
+    ProviderRegisterRequest,
+    ProviderStatus,
+)
 from coordinator.store import Store
 
 
@@ -48,9 +51,46 @@ async def register_provider(
         return new_provider.model_copy(deep=True)
 
 
-async def heartbeat(provider_id):
-    """Record a provider heartbeat."""
-    raise NotImplementedError("Team implementation pending")
+class ProviderNotFound(Exception):
+    """The requested Provider does not exist; routes translate this to HTTP 404."""
+
+    def __init__(self, provider_id: str):
+        super().__init__(f"provider_id {provider_id!r} not found")
+        self.provider_id = provider_id
+
+
+class ProviderDrained(Exception):
+    """A DRAINED Provider cannot heartbeat; routes translate this to HTTP 409."""
+
+    def __init__(self, provider_id: str):
+        super().__init__(f"provider_id {provider_id!r} is DRAINED")
+        self.provider_id = provider_id
+
+
+async def heartbeat(
+    store: Store, provider_id: str, request: HeartbeatRequest, received_at: datetime
+) -> Provider:
+    """
+    Record a heartbeat and return a copy of the updated Provider.
+    ProviderDrained for DRAINED without changing the stored record. Otherwise set
+    last_heartbeat_at to received_at; STALE -> ACTIVE, ACTIVE/DRAINING unchanged.
+    Revoked Leases stay terminal. request.provider_time is for logging only.
+    Return a deep copy, as register_provider does.
+    """
+    async with store.lock:
+        provider = store.providers.get(provider_id)
+        if provider is None:
+            raise ProviderNotFound(provider_id)
+
+        if provider.status == ProviderStatus.DRAINED:
+            raise ProviderDrained(provider_id)
+
+        if provider.status == ProviderStatus.STALE:
+            provider.status = ProviderStatus.ACTIVE
+
+        # return a copy
+        provider.last_heartbeat_at = received_at
+        return provider.model_copy(deep=True)
 
 
 async def expire_heartbeats(store: Store, now: datetime, timeout_seconds: float) -> None:
