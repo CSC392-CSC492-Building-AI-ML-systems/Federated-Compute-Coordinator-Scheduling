@@ -1,10 +1,11 @@
 """Tests for the job-to-provider matching policy."""
 
 from datetime import datetime, timezone
+
 import pytest
 
-from coordinator.models.provider import Provider, ProviderStatus, Capabilities
 from coordinator.models.job import Job, JobStatus
+from coordinator.models.provider import Capabilities, Provider, ProviderStatus
 from coordinator.policies.matching import can_run
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
