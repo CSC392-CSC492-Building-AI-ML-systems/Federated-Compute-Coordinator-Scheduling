@@ -6,3 +6,6 @@ heartbeat_timeout_seconds: 15
 
 # How often the monitor checks deadlines.
 monitor_interval_seconds: 1
+
+# How often the job scheduler runs.
+scheduler_interval_seconds: 1

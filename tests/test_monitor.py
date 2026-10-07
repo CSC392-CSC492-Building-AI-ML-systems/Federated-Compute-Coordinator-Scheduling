@@ -16,7 +16,11 @@ from coordinator.services import provider_service
 from coordinator.settings import DEFAULT_CONFIG_PATH, Settings, load_settings
 
 NOW = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
-SETTINGS = Settings(heartbeat_timeout_seconds=15.0, monitor_interval_seconds=0.01)
+
+# 1. Update SETTINGS fixture to include the scheduler interval
+SETTINGS = Settings(
+    heartbeat_timeout_seconds=15.0, monitor_interval_seconds=0.01, scheduler_interval_seconds=0.01
+)
 
 
 def test_tick_runs_heartbeat_check_then_drain_check(monkeypatch):
@@ -62,27 +66,36 @@ def test_loop_keeps_running_after_a_failed_tick(monkeypatch):
     assert sleeps == [0.01, 0.01, 0.01]
 
 
-def test_app_starts_monitor_and_stops_it_on_shutdown():
+# 2. Update lifespan test to assert both tasks start and stop cleanly
+def test_app_starts_background_tasks_and_stops_them_on_shutdown():
     with TestClient(create_app(clock=lambda: NOW, settings=SETTINGS)) as client:
-        task = client.app.state.monitor_task
-        assert task is not None
-        assert not task.done()
-    assert task.done()
+        monitor_task = client.app.state.monitor_task
+        scheduler_task = client.app.state.scheduler_task
+
+        assert monitor_task is not None
+        assert scheduler_task is not None
+
+        assert not monitor_task.done()
+        assert not scheduler_task.done()
+
+    assert monitor_task.done()
+    assert scheduler_task.done()
 
 
+# 3. Add scheduler interval to the config file validation checks
 def test_repo_config_file_loads():
     settings = load_settings(DEFAULT_CONFIG_PATH)
     assert settings.heartbeat_timeout_seconds > 0
     assert settings.monitor_interval_seconds > 0
+    assert settings.scheduler_interval_seconds > 0
 
 
 @pytest.mark.parametrize(
     "text",
     [
-        "heartbeat_timeout_seconds: 15\n",  # missing key
-        "heartbeat_timeout_seconds: 0\nmonitor_interval_seconds: 1\n",
-        "heartbeat_timeout_seconds: 15\nmonitor_interval_seconds: 1\n"
-        "heartbeat_timeuot_seconds: 5\n",  # typo -> unknown key
+        "heartbeat_timeout_seconds: 15\n",  # missing keys
+        "heartbeat_timeout_seconds: 0\nmonitor_interval_seconds: 1\nscheduler_interval_seconds: 1\n",
+        "heartbeat_timeout_seconds: 15\nmonitor_interval_seconds: 1\nscheduler_interval_seconds: 1\nheartbeat_timeuot_seconds: 5\n",  # typo -> unknown key
     ],
     ids=["missing-key", "zero-timeout", "unknown-key"],
 )
