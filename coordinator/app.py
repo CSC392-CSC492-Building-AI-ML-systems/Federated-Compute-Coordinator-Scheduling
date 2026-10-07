@@ -10,9 +10,9 @@ from fastapi import FastAPI
 from coordinator.api import jobs, leases, providers, status
 from coordinator.api.tools.errors import install_error_handlers
 from coordinator.monitor import monitor_loop
+from coordinator.scheduler import scheduler_loop
 from coordinator.settings import Settings, load_settings
 from coordinator.store import Store
-from coordinator.scheduler import scheduler_loop
 
 
 def utc_now() -> datetime:
@@ -36,11 +36,12 @@ def create_app(
         app.state.monitor_task = None
         app.state.scheduler_task = None
 
-
         # IMPORTANT: monitor =)
         app.state.monitor_task = asyncio.create_task(monitor_loop(app.state.store, clock, settings))
-        app.state.scheduler_task = asyncio.create_task(scheduler_loop(app.state.store, clock, settings))
-        
+        app.state.scheduler_task = asyncio.create_task(
+            scheduler_loop(app.state.store, clock, settings)
+        )
+
         yield
 
         # Stop the monitor on shutdown so it does not outlive the app.

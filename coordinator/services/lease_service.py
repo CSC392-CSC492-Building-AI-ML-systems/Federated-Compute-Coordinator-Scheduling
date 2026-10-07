@@ -1,7 +1,7 @@
 """Lease use cases. Names and signatures are placeholders for team design."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from coordinator.models.lease import Lease, LeaseStatus
 from coordinator.store import Store

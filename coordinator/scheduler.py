@@ -1,20 +1,19 @@
 """The Job Scheduler. Orchestrates the creation of OFFERED leases
 between QUEUED jobs and ACTIVE providers."""
+
 import asyncio
 import logging
 from datetime import datetime
 from typing import Callable
 
-from fastapi import Depends
-
-from coordinator.api.tools.dependencies import get_store
 from coordinator.models.job import JobStatus
 from coordinator.policies.matching import can_run
 from coordinator.services.lease_service import create_lease
-from coordinator.store import Store
 from coordinator.settings import Settings
+from coordinator.store import Store
 
 logger = logging.getLogger(__name__)
+
 
 async def run_matching(now: datetime, store: Store) -> None:
     """
