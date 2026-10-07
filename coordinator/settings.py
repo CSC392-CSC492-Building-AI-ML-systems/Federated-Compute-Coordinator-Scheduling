@@ -16,6 +16,8 @@ class Settings(BaseModel):
 
     heartbeat_timeout_seconds: float = Field(gt=0)
     monitor_interval_seconds: float = Field(gt=0)
+    # Add this line so the scheduler knows how long to sleep
+    scheduler_interval_seconds: float = Field(gt=0)
 
 
 def load_settings(path: Union[str, Path] = DEFAULT_CONFIG_PATH) -> Settings:

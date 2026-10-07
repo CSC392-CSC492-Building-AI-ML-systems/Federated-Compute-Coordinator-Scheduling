@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from coordinator.api import jobs, leases, providers, status
 from coordinator.api.tools.errors import install_error_handlers
 from coordinator.monitor import monitor_loop
+from coordinator.scheduler import scheduler_loop
 from coordinator.settings import Settings, load_settings
 from coordinator.store import Store
 
@@ -33,9 +34,13 @@ def create_app(
         app.state.clock = clock
         app.state.settings = settings
         app.state.monitor_task = None
+        app.state.scheduler_task = None
 
         # IMPORTANT: monitor =)
         app.state.monitor_task = asyncio.create_task(monitor_loop(app.state.store, clock, settings))
+        app.state.scheduler_task = asyncio.create_task(
+            scheduler_loop(app.state.store, clock, settings)
+        )
 
         yield
 
@@ -45,7 +50,11 @@ def create_app(
             with suppress(asyncio.CancelledError):
                 await app.state.monitor_task
 
-        # TODO: start and stop the scheduler the same way once it exists.
+        # Stop the scheduler on shutdown so it does not outlive the app.
+        if app.state.scheduler_task is not None:
+            app.state.scheduler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await app.state.scheduler_task
 
     app = FastAPI(title="Project 16 =)", lifespan=lifespan)
     for router in (providers.router, jobs.router, leases.router, status.router):

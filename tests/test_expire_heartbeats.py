@@ -198,7 +198,11 @@ def test_monitor_tick_reclaims_stale_work_before_drain_check(store, provider_sta
     store.jobs["j"].status = JobStatus.RUNNING
     store.jobs["j"].attempt_count = 1
     store.leases["l"].status = LeaseStatus.ACTIVE
-    settings = Settings(heartbeat_timeout_seconds=15, monitor_interval_seconds=1)
+
+    # Updated: Added scheduler_interval_seconds to satisfy Pydantic validation
+    settings = Settings(
+        heartbeat_timeout_seconds=15, monitor_interval_seconds=1, scheduler_interval_seconds=1
+    )
 
     asyncio.run(run_monitor_tick(store, NOW, settings))
 
