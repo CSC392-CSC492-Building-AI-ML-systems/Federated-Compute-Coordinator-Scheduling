@@ -3,6 +3,7 @@ between QUEUED jobs and ACTIVE providers."""
 import asyncio
 import logging
 from datetime import datetime
+from typing import Callable
 
 from fastapi import Depends
 
@@ -11,9 +12,11 @@ from coordinator.models.job import JobStatus
 from coordinator.policies.matching import can_run
 from coordinator.services.lease_service import create_lease
 from coordinator.store import Store
+from coordinator.settings import Settings
 
+logger = logging.getLogger(__name__)
 
-async def run_matching(now: datetime, store: Store = Depends(get_store) ):
+async def run_matching(now: datetime, store: Store) -> None:
     """
     Iterates through all QUEUED jobs and attempts to find
     a provider for them.
@@ -30,3 +33,20 @@ async def run_matching(now: datetime, store: Store = Depends(get_store) ):
                     job.current_lease_id = lease.lease_id
                     assigned_providers.add(provider.provider_id)
                     break
+
+
+async def scheduler_loop(store: Store, clock: Callable[[], datetime], settings: Settings) -> None:
+    """
+    Infinite background loop driving the scheduling ticks.
+    """
+    while True:
+        try:
+            await run_matching(clock(), store)
+        except asyncio.CancelledError:
+            # Re-raise to allow clean task cancellation on FastAPI shutdown
+            raise
+        except Exception:
+            # Trap unexpected errors so the background worker doesn't die
+            logger.exception("Scheduler tick failed")
+
+        await asyncio.sleep(settings.scheduler_interval_seconds)
