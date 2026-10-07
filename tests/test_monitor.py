@@ -94,8 +94,17 @@ def test_repo_config_file_loads():
     "text",
     [
         "heartbeat_timeout_seconds: 15\n",  # missing keys
-        "heartbeat_timeout_seconds: 0\nmonitor_interval_seconds: 1\nscheduler_interval_seconds: 1\n",
-        "heartbeat_timeout_seconds: 15\nmonitor_interval_seconds: 1\nscheduler_interval_seconds: 1\nheartbeat_timeuot_seconds: 5\n",  # typo -> unknown key
+        (
+            "heartbeat_timeout_seconds: 0\n"
+            "monitor_interval_seconds: 1\n"
+            "scheduler_interval_seconds: 1\n"
+        ),
+        (
+            "heartbeat_timeout_seconds: 15\n"
+            "monitor_interval_seconds: 1\n"
+            "scheduler_interval_seconds: 1\n"
+            "heartbeat_timeuot_seconds: 5\n"  # typo -> unknown key
+        ),
     ],
     ids=["missing-key", "zero-timeout", "unknown-key"],
 )
