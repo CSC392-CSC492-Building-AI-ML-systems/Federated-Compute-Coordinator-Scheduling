@@ -17,12 +17,11 @@ async def report_lease(lease_id, report):
     raise NotImplementedError("Team implementation pending")
 
 
-def create_lease(store: Store, job_id: str, provider_id: str) -> Lease:
+def create_lease(store: Store, job_id: str, provider_id: str, now: datetime) -> Lease:
     """
     Create an offered lease and return a copy of the stored record.
 
     """
-    now = datetime.now(timezone.utc)
     new_lease = Lease(
         lease_id=str(uuid.uuid4()),
         job_id=job_id,
