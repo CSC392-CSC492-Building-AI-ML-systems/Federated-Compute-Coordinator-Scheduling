@@ -1,0 +1,21 @@
+# reject_lease: a provider refuses offers because it is busy.
+#
+# node-rejector rejects with LOCAL_BUSY, the lease is REJECTED, the job
+# stays QUEUED with attempt_count unchanged, and node-rejector is added to the
+# job's rejected_provider_ids so it is not offered that job again.
+# node-normal finishes every job, all jobs SUCCEEDED by the end.
+
+providers:
+  - name: node-normal
+    behavior: normal
+    capabilities: { gpu_model: A100, vram_mb: 40960, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+
+  - name: node-rejector
+    behavior: reject_lease
+    capabilities: { gpu_model: T4, vram_mb: 16384, driver: "525.60", runtimes: [cuda12] }
+    tiers: [standard]
+    reject_reason: LOCAL_BUSY
+
+jobs:
+  - { tier: standard, min_vram_mb: 8192, artifact_required: false, count: 3, required_runtime: "cuda12", gpu_models: [] }

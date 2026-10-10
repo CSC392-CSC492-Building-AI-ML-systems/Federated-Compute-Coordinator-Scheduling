@@ -1,0 +1,23 @@
+# drain_misses_grace: a provider drains mid job and does not finish within the grace period.
+#
+# node-drains starts draining 2s into a 5s job, so 3s remain. The 1s
+# grace is not enough. At the drain deadline the lease is reclaimed, the job goes
+# back to QUEUED, and node-normal finishes it. node-drains ends DRAINED, and a
+# late report from it is rejected.
+
+providers:
+  - name: node-normal
+    behavior: normal
+    capabilities: { gpu_model: A100, vram_mb: 40960, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+
+  - name: node-drains
+    behavior: drain_mid_job
+    capabilities: { gpu_model: RTX3090, vram_mb: 24576, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+    meets_grace: false
+    grace_period_seconds: 1
+    drain_after_sec: 2
+
+jobs:
+  - { tier: standard, min_vram_mb: 8192, artifact_required: false, count: 2, required_runtime: "cuda12", gpu_models: [] }

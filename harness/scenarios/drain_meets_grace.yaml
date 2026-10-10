@@ -1,0 +1,22 @@
+# drain_meets_grace: a provider drains mid-job and finishes within the grace period.
+
+# node-drains starts draining 2s into a 5s job (defined in shared.yaml duration_sec),
+# so 3s remain. The 6s grace is enough. The job is reported SUCCESS, node-drains
+# gets no new offers, and it ends DRAINED (its heartbeat gets a 409 once the drain completes).
+
+providers:
+  - name: node-normal
+    behavior: normal
+    capabilities: { gpu_model: A100, vram_mb: 40960, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+
+  - name: node-drains
+    behavior: drain_mid_job
+    capabilities: { gpu_model: RTX3090, vram_mb: 24576, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+    meets_grace: true
+    grace_period_seconds: 6
+    drain_after_sec: 2
+
+jobs:
+  - { tier: standard, min_vram_mb: 8192, artifact_required: false, count: 2, required_runtime: "cuda12", gpu_models: [] }

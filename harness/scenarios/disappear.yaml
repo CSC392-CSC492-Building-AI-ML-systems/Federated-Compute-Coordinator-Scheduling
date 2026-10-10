@@ -1,0 +1,17 @@
+# disappear: a provider goes silent after 2 heartbeats, as if it crashed.
+
+# PROVIDER_STALE, lease revoked, job requeued and finished by node-normal.
+
+providers:
+  - name: node-normal
+    behavior: normal
+    capabilities: { gpu_model: A100, vram_mb: 40960, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+
+  - name: node-vanishes
+    behavior: disappear
+    capabilities: { gpu_model: RTX3090, vram_mb: 24576, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+
+jobs:
+  - { tier: standard, min_vram_mb: 8192, artifact_required: false, count: 2, required_runtime: "cuda12", gpu_models: [] }

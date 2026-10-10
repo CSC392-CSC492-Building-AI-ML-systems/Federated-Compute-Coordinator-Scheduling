@@ -1,0 +1,20 @@
+# normal: baseline with only well behaved providers. Run this first, if it
+# fails, the bug is in the basic lifecycle, not in a failure mode.
+#
+# All 4 jobs SUCCEEDED by about t=10, no request_failed events,
+# both providers still ACTIVE at the end.
+
+providers:
+  - name: node-a100-1
+    behavior: normal
+    capabilities: { gpu_model: A100, vram_mb: 40960, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard, premium]
+
+  - name: node-3090-1
+    behavior: normal
+    capabilities: { gpu_model: RTX3090, vram_mb: 24576, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+
+jobs:
+  - { tier: standard, min_vram_mb: 8192,  artifact_required: false, count: 3, required_runtime: "cuda12", gpu_models: [] }
+  - { tier: premium,  min_vram_mb: 32768, artifact_required: false, count: 1, required_runtime: "cuda12", gpu_models: ["A100"] }
