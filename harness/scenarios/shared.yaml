@@ -1,0 +1,19 @@
+# The runner loads this first, then the scenario file. A scenario overrides a
+# value by setting the same key.
+
+# Every provider, every scenario.
+heartbeat_interval_sec: 1
+poll_interval_sec: 1
+renew_interval_sec: 3
+
+# Length of one scenario run. Might not apply to all scenarios.
+run_duration_sec: 45
+
+# How long a fake job runs when its job group does not set duration_sec.
+duration_sec: 5
+
+# disappear nodes: heartbeats sent before the node goes silent.
+disappear_after_heartbeats: 2
+
+# clock_skew nodes: offset of provider_time from the real clock.
+skew_seconds: 3600

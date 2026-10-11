@@ -1,0 +1,14 @@
+# queue_timeout: a job that no provider can run waits in the queue until it times out.
+#
+# The 80 GB / 81920 MB job is never offered, and gets FAILED with QUEUE_TIMEOUT.
+# The normal jobs are not affected and are SUCCEEDED.
+
+providers:
+  - name: node-normal
+    behavior: normal
+    capabilities: { gpu_model: A100, vram_mb: 40960, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+
+jobs:
+  - { tier: standard, min_vram_mb: 8192,  artifact_required: false, count: 2, required_runtime: "cuda12", gpu_models: [] }
+  - { tier: standard, min_vram_mb: 81920, artifact_required: false, count: 1, required_runtime: "cuda12", gpu_models: [] }

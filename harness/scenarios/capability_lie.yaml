@@ -1,0 +1,18 @@
+# capability_lie: a provider provides false capabilities information.
+
+# CAPABILITY_MISMATCH, job retried and finished by node-normal.
+
+providers:
+  - name: node-normal
+    behavior: normal
+    capabilities: { gpu_model: A100, vram_mb: 40960, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+
+  - name: node-liar
+    behavior: capability_lie
+    capabilities: { gpu_model: RTX2060, vram_mb: 32768, driver: "510.47", runtimes: [cuda12] }
+    tiers: [standard]
+    actual_vram_mb: 6144
+
+jobs:
+  - { tier: standard, min_vram_mb: 16384, artifact_required: false, count: 3, required_runtime: "cuda12", gpu_models: [] }
