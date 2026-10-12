@@ -8,6 +8,7 @@ in the report; it never stops the run.
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import yaml
 
@@ -19,6 +20,11 @@ async def run_scenario(config_path):
     """Submit jobs, start providers, wait, and return the event log and final state."""
     with open(config_path, "r") as file:
         config = yaml.safe_load(file)
+
+    # Params priority: shared.yaml < scenario-level values < provider's own entry
+    with open(Path(config_path).parent / "shared.yaml") as file:
+        shared_params = yaml.safe_load(file)
+    shared_params.update({k: v for k, v in config.items() if k not in ("providers", "jobs")})
 
     client = CoordinatorClient(base_url="http://localhost:8000", api_key="test-key")
     providers = []
@@ -34,6 +40,7 @@ async def run_scenario(config_path):
             accepted_tiers=prov["tiers"],
             # driver_version = prov['capabilities']['driver'],
             behavior=prov["behavior"],
+            params={**shared_params, **prov},
         )
         providers.append(provider)
 
