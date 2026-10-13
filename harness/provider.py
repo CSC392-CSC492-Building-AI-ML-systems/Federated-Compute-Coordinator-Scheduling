@@ -11,13 +11,15 @@ import httpx
 
 from harness.errors import CoordinatorError
 
-# Can remove this if we decide to have the duration of the job directly
-# tied to the job as an attribute
-DEFAULT_JOB_DURATION_SEC = 4
-
+# Defaults matching shared.yaml. The runner passes the real
+# values in by `params`.
+DEFAULT_JOB_DURATION_SEC = 5
 HEARTBEAT_INTERVAL_SEC = 1
+RENEW_INTERVAL_SEC = 3
+# run() ticks once per second, looks for offers every tick,
 # Also finishes jobs, looks for leases etc. at every heartbeat interval
 # This interval is used for the ticks which package the above functionality
+TICK_SEC = 1
 
 
 class FakeProvider:
@@ -43,7 +45,18 @@ class FakeProvider:
         }
         self.accepted_tiers = accepted_tiers
         self.behavior = behavior
-        self.params = params
+
+        self.params = params or {}
+        self.heartbeat_interval = timedelta(
+            seconds=self.params.get("heartbeat_interval_sec", HEARTBEAT_INTERVAL_SEC)
+        )
+        self.renew_interval_sec = self.params.get("renew_interval_sec", RENEW_INTERVAL_SEC)
+        # This here is because job in a scenario takes the same time (shared.yaml or the scenario)
+        # Will have to change it if we make jobs differ in their timing
+        self.job_duration_sec = self.params.get("duration_sec", DEFAULT_JOB_DURATION_SEC)
+        self.last_heartbeat_at = None
+        self.last_renewed_at = None
+
         # Set to True once registered, set False to make the provider vanish
         self.is_heartbeating = False
         self.lease_id = None
@@ -89,16 +102,19 @@ class FakeProvider:
         )
 
     async def tick(self, now):
-        """One tick: heartbeat, then take an offer or finish the current job."""
+        """One tick: heartbeat if due, then take an offer, finish the job or renew it."""
         if not self.is_heartbeating:
             return
         try:
-            await self.heartbeat(now)
+            if self.heartbeat_due(now):
+                await self.heartbeat(now)
             if self.lease_id is None:
                 if self.status == "ACTIVE":
                     await self.check_offers(now)
             elif now >= self.job_finishes_at:
                 await self.finish_job(now)
+            elif now - self.last_renewed_at >= timedelta(seconds=self.renew_interval_sec):
+                await self.renew(now)
         except CoordinatorError as error:
             self.log_error(now, error)
         except httpx.TransportError as error:
@@ -120,7 +136,13 @@ class FakeProvider:
                 self.log_event(now, "drained")
             raise
         self.status = response["status"]
+        self.last_heartbeat_at = now
         self.log_event(now, "heartbeat", status=self.status)
+
+    def heartbeat_due(self, now):
+        if self.last_heartbeat_at is None:
+            return True
+        return now - self.last_heartbeat_at >= self.heartbeat_interval
 
     async def check_offers(self, now):
         offers = await self.client.get_lease_offers(self.provider_id)
@@ -129,18 +151,35 @@ class FakeProvider:
         # MVP: at most one live lease per provider, so take the first offer.
         offer = offers[0]
         lease_id = offer["lease_id"]
-        # TODO: The job itself is the sleep, but right now this
-        # just assigns 4 seconds to all of them. This will probably change once job.py
-        # or something of the sort is written.
-        duration = offer.get("duration_sec", DEFAULT_JOB_DURATION_SEC)
         await self.client.accept(lease_id, self.provider_id)
         # Track the lease as soon as it is accepted, so a failed `started` call
         # does not leave the coordinator holding a lease this provider forgot.
         self.lease_id = lease_id
-        self.job_finishes_at = now + timedelta(seconds=duration)
+        # The job itself is the sleep: it is done once now reaches job_finishes_at
+        self.job_finishes_at = now + timedelta(seconds=self.job_duration_sec)
+        self.last_renewed_at = now
         self.log_event(now, "accepted", lease_id=lease_id, job_id=offer["job_id"])
         # SUCCESS can only occur when the job is in the RUNNING state
         await self.client.started(lease_id, self.provider_id)
+
+    async def renew(self, now):
+        """Ask for more time on the running lease. Heartbeats do not extend a lease.
+        Renew adds extend_seconds to the current expires_at, so extending by the
+        renew interval keeps the lease the same distance ahead of now.
+        """
+        # Record the attempt before calling, so a failed renew waits for the next
+        # interval instead of retrying every tick. Missing one renew is safe (R4).
+        self.last_renewed_at = now
+        try:
+            await self.client.renew(self.lease_id, self.provider_id, self.renew_interval_sec)
+        except CoordinatorError as error:
+            # 409: the lease already expired or was revoked, so the job no longer belongs
+            # to this provider
+            if error.status_code == 409:
+                self.log_event(now, "lease_lost", lease_id=self.lease_id)
+                self.lease_id = None
+            raise
+        self.log_event(now, "renewed", lease_id=self.lease_id)
 
     async def finish_job(self, now):
         """Report completion of the lease and become ready to accept another one."""
@@ -168,4 +207,4 @@ class FakeProvider:
         await self.register(datetime.now(timezone.utc))
         while self.is_heartbeating:
             await self.tick(datetime.now(timezone.utc))
-            await asyncio.sleep(HEARTBEAT_INTERVAL_SEC)
+            await asyncio.sleep(TICK_SEC)
