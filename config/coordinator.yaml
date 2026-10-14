@@ -1,11 +1,37 @@
-# Coordinator settings. Values are proposals; change them here, not in code.
+# Coordinator settings. Change values here, not in code.
 # Loaded by coordinator/settings.py at startup.
+#
+# Values follow the team's timing parameter table, tuned for a 45 s Harness
+# scenario run. If you change one, check the rule noted next to it.
 
 # A Provider with no heartbeat for this long is considered unreachable.
-heartbeat_timeout_seconds: 15
+# Rule: Harness heartbeat interval (1 s) <= this / 3.
+heartbeat_timeout_seconds: 5
 
 # How often the monitor checks deadlines.
+# Rule: <= heartbeat_timeout_seconds / 3.
 monitor_interval_seconds: 1
 
 # How often the job scheduler runs.
 scheduler_interval_seconds: 1
+
+# --- Agreed values below are not read by any code yet (Lease and retry work). ---
+
+# How long a Provider has to accept or reject an offer.
+# Rule: Harness poll interval (1 s) <= this / 2.
+offer_timeout_seconds: 5
+
+# Length of a Lease after accept; a renew pushes its end later.
+# Rule: Harness renew interval (3 s) <= this / 3.
+lease_duration_seconds: 10
+
+# How many times a Job may be started before it is marked FAILED.
+max_attempts: 3
+
+# After this many offer timeouts from the same Provider for the same Job, the
+# scheduler stops offering that Job to that Provider.
+offer_timeouts_before_exclude: 2
+
+# A Job still QUEUED this long after submission fails with QUEUE_TIMEOUT.
+# 30 s fits a 45 s scenario run; use 3600 for a long-running Coordinator.
+queue_timeout_seconds: 30
