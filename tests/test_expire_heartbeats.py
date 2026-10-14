@@ -8,7 +8,7 @@ from coordinator.models.lease import TERMINAL_LEASE_STATUSES, Lease, LeaseStatus
 from coordinator.models.provider import Capabilities, Provider, ProviderStatus
 from coordinator.monitor import run_monitor_tick
 from coordinator.services.provider_service import expire_heartbeats
-from coordinator.settings import Settings
+from coordinator.settings import load_settings
 from coordinator.store import Store
 
 NOW = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
@@ -199,10 +199,9 @@ def test_monitor_tick_reclaims_stale_work_before_drain_check(store, provider_sta
     store.jobs["j"].attempt_count = 1
     store.leases["l"].status = LeaseStatus.ACTIVE
 
-    # Updated: Added scheduler_interval_seconds to satisfy Pydantic validation
-    settings = Settings(
-        heartbeat_timeout_seconds=15, monitor_interval_seconds=1, scheduler_interval_seconds=1
-    )
+    # Repo config with only the value this test depends on overridden, so adding a
+    # new setting does not break it.
+    settings = load_settings().model_copy(update={"heartbeat_timeout_seconds": 15})
 
     asyncio.run(run_monitor_tick(store, NOW, settings))
 
