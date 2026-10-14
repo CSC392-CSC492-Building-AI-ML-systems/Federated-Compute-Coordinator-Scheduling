@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from coordinator.models.job import JobStatus
 from coordinator.models.lease import TERMINAL_LEASE_STATUSES, InternalReason, LeaseStatus
 from coordinator.models.provider import (
+    DrainRequest,
     HeartbeatRequest,
     Provider,
     ProviderRegisterRequest,
@@ -160,3 +161,41 @@ async def finish_drains(store: Store, now: datetime) -> None:
             # TODO: when past_deadline, revoke remaining Leases (DRAIN_RECLAIM)
             # and send their Jobs to the retry check before marking DRAINEDD. =)
             provider.status = ProviderStatus.DRAINED
+
+
+async def drain(
+    store: Store, provider_id: str, request: DrainRequest, received_at: datetime
+) -> Provider:
+    async with store.lock:
+        # 1. already draining
+        # 2. active now -> draining
+        # 3. drained
+        # 4. unhealthy -> draining
+        # 5. stale -> draining
+        # use get to prevent[id] error :)
+        provider = store.providers.get(provider_id)
+        if provider is None:
+            raise ProviderNotFound(provider_id)
+
+        if provider.status == ProviderStatus.DRAINED:
+            raise ProviderDrained(provider_id)
+
+        # Checked before changing anything: a second drain request must not push
+        # the deadline later.
+        if provider.status == ProviderStatus.DRAINING:
+            return provider.model_copy(deep=True)
+
+        provider.status = ProviderStatus.DRAINING
+        provider.drain_deadline = received_at + timedelta(seconds=request.grace_period_seconds)
+
+        # A draining Provider takes no new work, so its unanswered offers go back
+        # to the queue. No attempt is used: the Job never started.
+        for lease in store.leases.values():
+            if lease.provider_id == provider_id and lease.status == LeaseStatus.OFFERED:
+                lease.status = LeaseStatus.REVOKED
+                lease.reason = InternalReason.DRAIN_STARTED.value
+                job = store.jobs[lease.job_id]
+                if job.current_lease_id == lease.lease_id:
+                    job.current_lease_id = None
+
+        return provider.model_copy(deep=True)

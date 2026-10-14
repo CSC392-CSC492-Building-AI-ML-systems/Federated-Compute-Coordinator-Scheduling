@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends
 from coordinator.api.tools.dependencies import get_received_at, get_store
 from coordinator.api.tools.errors import ApiError
 from coordinator.models.provider import (
+    DrainRequest,
+    DrainResponse,
     HeartbeatRequest,
     HeartbeatResponse,
     ProviderRegisterRequest,
@@ -59,4 +61,25 @@ async def heartbeat(
         provider_id=provider.provider_id,
         status=provider.status,
         server_received_at=received_at,
+    )
+
+
+@router.post("/providers/{provider_id}/drain", status_code=200, response_model=DrainResponse)
+async def drain(
+    provider_id: str,
+    body: DrainRequest,
+    store: Store = Depends(get_store),
+    received_at: datetime = Depends(get_received_at),
+):
+    """Start draining a Provider; the service owns the deadline and state transitions."""
+    try:
+        provider = await provider_service.drain(store, provider_id, body, received_at)
+    except provider_service.ProviderNotFound as exc:
+        raise ApiError(404, "NOT_FOUND", str(exc)) from exc
+    except provider_service.ProviderDrained as exc:
+        raise ApiError(409, "INVALID_STATE_TRANSITION", str(exc)) from exc
+    return DrainResponse(
+        provider_id=provider.provider_id,
+        status=provider.status,
+        drain_deadline=provider.drain_deadline,
     )
