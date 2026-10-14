@@ -59,9 +59,15 @@ class HeartbeatRequest(BaseModel):
 
 
 class DrainRequest(BaseModel):
+    # Note: A machine drain itself, so no need for id :)
     model_config = ConfigDict(extra="forbid")
-
     grace_period_seconds: int = Field(gt=0)
+
+
+class DrainResponse(BaseModel):
+    provider_id: str
+    status: ProviderStatus
+    drain_deadline: datetime
 
 
 class Provider(BaseModel):

@@ -19,6 +19,14 @@ class Settings(BaseModel):
     # Add this line so the scheduler knows how long to sleep
     scheduler_interval_seconds: float = Field(gt=0)
 
+    # From the team's timing parameter table. Not read by any code yet: they are
+    # here so the Lease and retry work can use settings instead of hard-coded numbers.
+    offer_timeout_seconds: float = Field(gt=0)
+    lease_duration_seconds: float = Field(gt=0)
+    max_attempts: int = Field(ge=1)
+    offer_timeouts_before_exclude: int = Field(ge=1)
+    queue_timeout_seconds: float = Field(gt=0)
+
 
 def load_settings(path: Union[str, Path] = DEFAULT_CONFIG_PATH) -> Settings:
     """Read and validate a settings YAML file."""
