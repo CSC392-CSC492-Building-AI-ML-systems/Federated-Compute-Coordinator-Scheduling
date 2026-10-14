@@ -8,18 +8,24 @@ import asyncio
 from datetime import datetime, timezone
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from coordinator import monitor
 from coordinator.app import create_app
 from coordinator.services import provider_service
-from coordinator.settings import DEFAULT_CONFIG_PATH, Settings, load_settings
+from coordinator.settings import DEFAULT_CONFIG_PATH, load_settings
 
 NOW = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
 
-# 1. Update SETTINGS fixture to include the scheduler interval
-SETTINGS = Settings(
-    heartbeat_timeout_seconds=15.0, monitor_interval_seconds=0.01, scheduler_interval_seconds=0.01
+# Start from the repo config and override only what these tests care about, so
+# adding a new setting does not break them.
+SETTINGS = load_settings().model_copy(
+    update={
+        "heartbeat_timeout_seconds": 15.0,
+        "monitor_interval_seconds": 0.01,
+        "scheduler_interval_seconds": 0.01,
+    }
 )
 
 
@@ -90,26 +96,31 @@ def test_repo_config_file_loads():
     assert settings.scheduler_interval_seconds > 0
 
 
+def test_repo_config_follows_coordinator_timing_rule():
+    settings = load_settings(DEFAULT_CONFIG_PATH)
+    # A dead Provider must be noticed at most one monitor tick after its timeout.
+    assert settings.monitor_interval_seconds <= settings.heartbeat_timeout_seconds / 3
+
+
+def _config_with(change):
+    """The repo config as a dict, with one deliberate mistake applied."""
+    config = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    change(config)
+    return config
+
+
 @pytest.mark.parametrize(
-    "text",
+    "change",
     [
-        "heartbeat_timeout_seconds: 15\n",  # missing keys
-        (
-            "heartbeat_timeout_seconds: 0\n"
-            "monitor_interval_seconds: 1\n"
-            "scheduler_interval_seconds: 1\n"
-        ),
-        (
-            "heartbeat_timeout_seconds: 15\n"
-            "monitor_interval_seconds: 1\n"
-            "scheduler_interval_seconds: 1\n"
-            "heartbeat_timeuot_seconds: 5\n"  # typo -> unknown key
-        ),
+        lambda config: config.pop("max_attempts"),
+        lambda config: config.update(heartbeat_timeout_seconds=0),
+        lambda config: config.update(max_attempts=0),
+        lambda config: config.update(heartbeat_timeuot_seconds=5),  # typo
     ],
-    ids=["missing-key", "zero-timeout", "unknown-key"],
+    ids=["missing-key", "zero-timeout", "zero-attempts", "unknown-key"],
 )
-def test_bad_config_fails_at_startup(tmp_path, text):
+def test_bad_config_fails_at_startup(tmp_path, change):
     path = tmp_path / "coordinator.yaml"
-    path.write_text(text, encoding="utf-8")
+    path.write_text(yaml.safe_dump(_config_with(change)), encoding="utf-8")
     with pytest.raises(ValueError):
         load_settings(path)
