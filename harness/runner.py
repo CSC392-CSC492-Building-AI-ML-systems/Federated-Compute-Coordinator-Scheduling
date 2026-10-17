@@ -56,12 +56,10 @@ async def run_scenario(config_path):
     # submit job after provider
     for job_config in config["jobs"]:
         for _ in range(job_config["count"]):
-            # change with client.py
             job_payload = {
                 "required_vram_mb": job_config["min_vram_mb"],
-                # Default, likely change
-                "required_runtime": "cuda12",
-                "tier": job_config["tier"],
+                "required_runtime": job_config.get("required_runtime", "cuda12"),
+                "gpu_models": job_config.get("gpu_models", []),
             }
             await client.submit_job(job_payload)
 
