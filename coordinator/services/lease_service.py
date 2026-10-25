@@ -17,7 +17,7 @@ async def report_lease(lease_id, report):
     raise NotImplementedError("Team implementation pending")
 
 
-def create_lease(store: Store, job_id: str, provider_id: str, now: datetime) -> Lease:
+def create_lease(store: Store, job_id: str, provider_id: str, now: datetime, timeout: float) -> Lease:
     """
     Create an offered lease and return a copy of the stored record.
 
@@ -29,8 +29,8 @@ def create_lease(store: Store, job_id: str, provider_id: str, now: datetime) -> 
         status=LeaseStatus.OFFERED,
         offer_deadline=now
         + timedelta(
-            hours=1
-        ),  # Temporarily sets to 1 hour as we have not decided on the deadline duration.
+            seconds=timeout
+        ),  
         created_at=now,
     )
 
