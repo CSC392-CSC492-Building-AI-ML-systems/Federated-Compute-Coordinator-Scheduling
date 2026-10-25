@@ -7,9 +7,9 @@ from datetime import datetime
 from typing import Callable
 
 from coordinator.models.job import JobStatus
+from coordinator.models.lease import LeaseStatus
 from coordinator.policies.matching import can_run
 from coordinator.services.lease_service import create_lease
-from coordinator.models.lease import LeaseStatus
 from coordinator.settings import Settings
 from coordinator.store import Store
 
@@ -33,7 +33,9 @@ async def run_matching(now: datetime, store: Store, settings: Settings) -> None:
 
             for provider in store.providers.values():
                 if provider.provider_id not in assigned_providers and can_run(provider, job):
-                    lease = create_lease(store, job.job_id, provider.provider_id, now, settings.offer_timeout_seconds)
+                    lease = create_lease(
+                        store, job.job_id, provider.provider_id, now, settings.offer_timeout_seconds
+                    )
                     job.current_lease_id = lease.lease_id
                     assigned_providers.add(provider.provider_id)
                     break
