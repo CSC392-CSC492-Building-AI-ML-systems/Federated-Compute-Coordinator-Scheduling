@@ -100,6 +100,7 @@ class Lease(BaseModel):
     started_at: Optional[datetime] = None
     released_at: Optional[datetime] = None
 
+
 class JobRequirements(BaseModel):
     required_vram_mb: int
     gpu_models: list[str]
