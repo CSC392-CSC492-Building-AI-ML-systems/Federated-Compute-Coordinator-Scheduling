@@ -15,8 +15,13 @@ router = APIRouter()
 # Keep state changes in services, not in route handlers.
 
 
-@router.get("/{provider_id}/lease-offers", response_model=ProviderLeaseOffersResponse)
+@router.get(
+    "/providers/{provider_id}/lease-offers",
+    status_code=200,
+    response_model=ProviderLeaseOffersResponse,
+)
 async def get_lease_offers(provider_id: str, store: Store = Depends(get_store)):
+    """Endpoint to obtain all offered leases and their job requirements for a specific provider."""
     try:
         return await get_provider_lease_offers(store, provider_id)
     except ProviderNotFound as exc:
