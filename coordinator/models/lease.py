@@ -99,3 +99,18 @@ class Lease(BaseModel):
     accepted_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     released_at: Optional[datetime] = None
+
+class JobRequirements(BaseModel):
+    required_vram_mb: int
+    gpu_models: list[str]
+    required_runtime: str
+    tier: str
+
+
+class LeaseOfferItem(BaseModel):
+    lease: Lease
+    requirements: JobRequirements
+
+
+class ProviderLeaseOffersResponse(BaseModel):
+    offers: list[LeaseOfferItem]
