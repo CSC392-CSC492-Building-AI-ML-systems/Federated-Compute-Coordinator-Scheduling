@@ -1,4 +1,4 @@
-"""Tests for the GET /providers/{provider_id}/lease-offers feature across schema, service, and API layers."""
+"""Tests for GET /providers/{provider_id}/lease-offers across schema, service, and API."""
 
 import asyncio
 from datetime import datetime, timezone
@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from coordinator.app import app
 from coordinator.api.tools.dependencies import get_store
+from coordinator.app import app
 from coordinator.models.job import Job, JobStatus
 from coordinator.models.lease import (
     JobRequirements,

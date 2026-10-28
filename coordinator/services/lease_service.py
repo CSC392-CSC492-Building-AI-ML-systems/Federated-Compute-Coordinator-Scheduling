@@ -4,14 +4,14 @@ import uuid
 from datetime import datetime, timedelta
 
 from coordinator.models.lease import (
-    Lease,
-    LeaseStatus,
     JobRequirements,
+    Lease,
     LeaseOfferItem,
+    LeaseStatus,
     ProviderLeaseOffersResponse,
 )
-from coordinator.store import Store
 from coordinator.services.provider_service import ProviderNotFound
+from coordinator.store import Store
 
 
 async def accept_lease(lease_id):
