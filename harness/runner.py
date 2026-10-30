@@ -7,6 +7,7 @@ in the report; it never stops the run.
 """
 
 import asyncio
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -39,7 +40,7 @@ async def run_scenario(config_path):
             runtimes=prov["capabilities"]["runtimes"],
             accepted_tiers=prov["tiers"],
             # driver_version = prov['capabilities']['driver'],
-            behavior=prov["behavior"],
+            behavior=prov.get("behavior", "normal"),
             params={**shared_params, **prov},
         )
         providers.append(provider)
@@ -57,6 +58,7 @@ async def run_scenario(config_path):
     for job_config in config["jobs"]:
         for _ in range(job_config["count"]):
             job_payload = {
+                "tier": job_config["tier"],
                 "required_vram_mb": job_config["min_vram_mb"],
                 "required_runtime": job_config.get("required_runtime", "cuda12"),
                 "gpu_models": job_config.get("gpu_models", []),
@@ -80,7 +82,8 @@ async def run_scenario(config_path):
 
 
 def main():
-    asyncio.run(run_scenario("harness/scenarios/default.yaml"))
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "harness/scenarios/default.yaml"
+    asyncio.run(run_scenario(config_path))
 
 
 if __name__ == "__main__":
