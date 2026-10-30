@@ -1,0 +1,36 @@
+# clock_skew: providers with wrong clocks (+1h, -1h, -10s), coordinator uses its own time.
+
+# No provider ever STALE, all 4 ACTIVE at the end. All 7 jobs COMPLETED with
+# attempt_count 1. The RTX4090/L4 job and the pytorch2 job only fit skewed nodes,
+# so skewed nodes must run work normally too.
+
+providers:
+  - name: node-normal
+    behavior: normal
+    capabilities: { gpu_model: A100, vram_mb: 40960, driver: "535.104", runtimes: [cuda12, cuda11] }
+    tiers: [standard, premium]
+
+  - name: node-skew-ahead
+    behavior: clock_skew
+    capabilities: { gpu_model: RTX4090, vram_mb: 24576, driver: "550.54", runtimes: [cuda12] }
+    tiers: [standard]
+    skew_seconds: 3600
+
+  - name: node-skew-behind
+    behavior: clock_skew
+    capabilities: { gpu_model: RTX3090, vram_mb: 24576, driver: "535.104", runtimes: [cuda12, cuda11] }
+    tiers: [standard]
+    skew_seconds: -3600
+
+  - name: node-skew-slight
+    behavior: clock_skew
+    capabilities: { gpu_model: L4, vram_mb: 24576, driver: "550.54", runtimes: [cuda12, pytorch2] }
+    tiers: [standard]
+    skew_seconds: -10
+
+jobs:
+  - { tier: standard, min_vram_mb: 8192,  artifact_required: false, count: 3, required_runtime: "cuda12",   gpu_models: [],                 duration_sec: 5 }
+  - { tier: standard, min_vram_mb: 16384, artifact_required: false, count: 1, required_runtime: "cuda11",   gpu_models: [RTX3090, A100],    duration_sec: 4 }
+  - { tier: premium,  min_vram_mb: 32768, artifact_required: false, count: 1, required_runtime: "cuda12",   gpu_models: [A100],             duration_sec: 6 }
+  - { tier: standard, min_vram_mb: 20480, artifact_required: false, count: 1, required_runtime: "cuda12",   gpu_models: [RTX4090, L4],      duration_sec: 3 }
+  - { tier: standard, min_vram_mb: 8192,  artifact_required: false, count: 1, required_runtime: "pytorch2", gpu_models: [],                 duration_sec: 4 }
