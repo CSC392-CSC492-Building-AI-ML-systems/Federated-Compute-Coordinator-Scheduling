@@ -1,0 +1,34 @@
+# upload_fail: a provider finishes the job but the result upload fails (first job only).
+
+# ARTIFACT_UPLOAD_FAILED, retry any: job requeued, attempt used, provider not excluded.
+# The cuda11 job only fits node-t4-upload-fail, so it retries on the same node and
+# COMPLETED with attempt_count 2. All 6 jobs COMPLETED, all providers ACTIVE.
+
+providers:
+  - name: node-upload-fail
+    behavior: upload_fail
+    capabilities: { gpu_model: RTX3090, vram_mb: 24576, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+    fail_times: 1
+
+  - name: node-a100
+    behavior: normal
+    capabilities: { gpu_model: A100, vram_mb: 40960, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard, premium]
+
+  - name: node-l4
+    behavior: normal
+    capabilities: { gpu_model: L4, vram_mb: 24576, driver: "550.54", runtimes: [cuda12] }
+    tiers: [standard]
+
+  - name: node-t4-upload-fail
+    behavior: upload_fail
+    capabilities: { gpu_model: T4, vram_mb: 16384, driver: "525.60", runtimes: [cuda11] }
+    tiers: [standard]
+    fail_times: 1
+
+jobs:
+  - { tier: standard, min_vram_mb: 8192,  artifact_required: true, count: 3, required_runtime: "cuda12", gpu_models: [],             duration_sec: 5 }
+  - { tier: premium,  min_vram_mb: 32768, artifact_required: true, count: 1, required_runtime: "cuda12", gpu_models: [A100],         duration_sec: 6 }
+  - { tier: standard, min_vram_mb: 8192,  artifact_required: true, count: 1, required_runtime: "cuda11", gpu_models: [],             duration_sec: 4 }
+  - { tier: standard, min_vram_mb: 20480, artifact_required: true, count: 1, required_runtime: "cuda12", gpu_models: [RTX3090, L4],  duration_sec: 3 }

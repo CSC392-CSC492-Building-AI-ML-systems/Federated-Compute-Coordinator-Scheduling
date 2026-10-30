@@ -1,7 +1,7 @@
 """One simulated provider node. `behavior` selects normal operation or a failure mode.
 
-The normal lifecycle lives here. At the step a failure mode changes, the provider
-branches on `behavior` and calls the matching function in harness.behaviors.
+The normal lifecycle and every coordinator call live here. At each lifecycle step
+the provider asks its Behavior (harness.behaviors) what to do.
 """
 
 import asyncio
@@ -9,8 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from harness.behaviors import execution, liveness
-from harness.behaviors import lease as lease_behaviors
+from harness.behaviors import make_behavior
 from harness.errors import CoordinatorError
 
 # Defaults matching shared.yaml. The runner passes the real
@@ -46,9 +45,9 @@ class FakeProvider:
             "runtimes": runtimes,
         }
         self.accepted_tiers = accepted_tiers
-        self.behavior = behavior
 
         self.params = params or {}
+        self.behavior = make_behavior(behavior, self.params)
         self.heartbeat_interval = timedelta(
             seconds=self.params.get("heartbeat_interval_sec", HEARTBEAT_INTERVAL_SEC)
         )
@@ -62,23 +61,15 @@ class FakeProvider:
         # Set to True once registered, set False to make the provider vanish
         self.is_heartbeating = False
         self.lease_id = None
-        # We can make this be the current time of the provider + the job duration
+        # What the running job will report, and when (from Behavior.plan_job)
+        self.job_plan = None
+        self.job_started_at = None
         self.job_finishes_at = None
         self.events = []
         # Status last reported by the coordinator in respect to this provider
         self.status = None
-
-        # --- NEW Behaviour states ---
-        self.heartbeat_count = 0  # for disappear
-        self.job_started_at = None  # for drain_mid_job
-        # to change after yaml param things are changed again
-        self.disappear_after_heartbeats = self.params.get("disappear_after_heartbeats", 2)
-        self.skew_seconds = self.params.get("skew_seconds", 3600)
-        self.reject_reason = self.params.get("reject_reason", "LOCAL_BUSY")
-        self.actual_vram_mb = self.params.get("actual_vram_mb", None)
-        self.actual_vram_mb = self.params.get("actual_vram_mb", None)
-        self.drain_after_sec = self.params.get("drain_after_sec", None)
-        self.grace_period_seconds = self.params.get("grace_period_seconds", None)
+        # Read by behaviors (like disappear after N heartbeats)
+        self.heartbeat_count = 0
 
     async def register(self, now):
         try:
@@ -97,7 +88,7 @@ class FakeProvider:
             return
         self.status = response["status"]
         self.is_heartbeating = True
-        self.log_event(now, "registered", status=self.status)
+        self.log_event(now, "registered", status=self.status, behavior=self.behavior.name)
 
     async def drain(self, now, grace_period_seconds):
         """Commences a drain. Tries to finish the current job in the grace period,
@@ -119,10 +110,10 @@ class FakeProvider:
         """One tick: heartbeat if due, then take an offer, finish the job or renew it."""
         if not self.is_heartbeating:
             return
-        if self.behavior == "disappear":
-            if self.heartbeat_count >= self.disappear_after_heartbeats:
-                await liveness.disappear(self, now)
-                return
+        if self.behavior.is_silent(self, now):
+            self.is_heartbeating = False
+            self.log_event(now, "went_silent", heartbeat_count=self.heartbeat_count)
+            return
         try:
             if self.heartbeat_due(now):
                 await self.heartbeat(now)
@@ -134,16 +125,8 @@ class FakeProvider:
             elif now - self.last_renewed_at >= timedelta(seconds=self.renew_interval_sec):
                 await self.renew(now)
 
-            # To discuss if logic to be rather shifted to behaviour functions
-            if (
-                self.behavior == "drain_mid_job"
-                and self.lease_id is not None
-                and self.job_started_at is not None
-                and self.status == "ACTIVE"
-                and self.drain_after_sec is not None
-                and (now - self.job_started_at).total_seconds() >= self.drain_after_sec
-            ):
-                await execution.drain_mid_job(self, now)
+            if self.lease_id is not None:
+                await self.behavior.on_running_tick(self, now)
 
         except CoordinatorError as error:
             self.log_error(now, error)
@@ -157,10 +140,7 @@ class FakeProvider:
     # a heartbeat gets a 409 while DRAINING.
     # Other 409 sources shouldn't stop the heartbeating.
     async def heartbeat(self, now):
-        if self.behavior == "clock_skew":
-            provider_time = liveness.clock_skew(self, now)
-        else:
-            provider_time = now.isoformat()
+        provider_time = self.behavior.provider_time(self, now)
         try:
             response = await self.client.heartbeat(self.provider_id, provider_time)
         except CoordinatorError as error:
@@ -187,19 +167,30 @@ class FakeProvider:
         offer = offers[0]
         lease_id = offer["lease_id"]
 
-        if self.behavior == "reject_lease":
-            await lease_behaviors.reject_lease(self, offer, now)
+        decision = self.behavior.decide_offer(self, offer)
+        if not decision.accept:
+            await self.client.reject(lease_id, self.provider_id, decision.reason)
+            self.log_event(
+                now, "rejected", lease_id=lease_id, job_id=offer["job_id"], reason=decision.reason
+            )
             return
 
         await self.client.accept(lease_id, self.provider_id)
         # Track the lease as soon as it is accepted, so a failed `started` call
         # does not leave the coordinator holding a lease this provider forgot.
         self.lease_id = lease_id
+        self.job_plan = self.behavior.plan_job(self, offer, self.job_duration_sec)
         # The job itself is the sleep: it is done once now reaches job_finishes_at
-        self.job_finishes_at = now + timedelta(seconds=self.job_duration_sec)
+        self.job_finishes_at = now + timedelta(seconds=self.job_plan.run_sec)
         self.job_started_at = now
         self.last_renewed_at = now
-        self.log_event(now, "accepted", lease_id=lease_id, job_id=offer["job_id"])
+        self.log_event(
+            now,
+            "accepted",
+            lease_id=lease_id,
+            job_id=offer["job_id"],
+            planned_outcome=self.job_plan.outcome,
+        )
         # SUCCESS can only occur when the job is in the RUNNING state
         await self.client.started(lease_id, self.provider_id)
 
@@ -218,29 +209,23 @@ class FakeProvider:
             # to this provider
             if error.status_code == 409:
                 self.log_event(now, "lease_lost", lease_id=self.lease_id)
-                self.lease_id = None
-                self.job_started_at = None
+                self.clear_job()
             raise
         self.log_event(now, "renewed", lease_id=self.lease_id)
 
     async def finish_job(self, now):
-        """Report completion of the lease and become ready to accept another one."""
-        temp_lease_id = self.lease_id
+        """Report the planned outcome of the lease and become ready for another one."""
+        lease_id, plan = self.lease_id, self.job_plan
+        self.clear_job()
+        await self.client.report(lease_id, self.provider_id, plan.outcome, plan.reason)
+        self.log_event(now, "reported", lease_id=lease_id, outcome=plan.outcome, reason=plan.reason)
+
+    def clear_job(self):
+        """Forget the current lease and job."""
         self.lease_id = None
+        self.job_plan = None
         self.job_started_at = None
-
-        if self.behavior == "capability_lie":
-            await lease_behaviors.capability_lie(self, temp_lease_id, now)
-            return
-        if self.behavior == "upload_fail":
-            await execution.upload_fail(self, temp_lease_id, now)
-            return
-        if self.behavior == "disk_full":
-            await execution.disk_full(self, temp_lease_id, now)
-            return
-
-        await self.client.report(temp_lease_id, self.provider_id, "SUCCESS")
-        self.log_event(now, "reported", lease_id=temp_lease_id, outcome="SUCCESS")
+        self.job_finishes_at = None
 
     def log_error(self, now, error):
         """Log a request the coordinator rejected, instead of crashing the run."""

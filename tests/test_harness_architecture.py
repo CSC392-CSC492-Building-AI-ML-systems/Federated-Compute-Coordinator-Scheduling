@@ -8,6 +8,7 @@ MODULES = (
     "client",
     "provider",
     "runner",
+    "behaviors.base",
     "behaviors.liveness",
     "behaviors.lease",
     "behaviors.execution",

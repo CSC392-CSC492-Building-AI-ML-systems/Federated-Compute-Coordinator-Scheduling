@@ -1,0 +1,37 @@
+# disk_full: a provider's disk fills up 2s into its first job.
+
+# DISK_FULL, retry elsewhere, job requeued, attempt used, failing node added to the
+# job's rejected_provider_ids. The pytorch2 and cuda11 jobs fail on their first node
+# and COMPLETED on node-a100 with attempt_count 2. node-disk-full still runs other
+# jobs fine (exclusion is per job). All 6 jobs COMPLETED, all providers ACTIVE.
+
+providers:
+  - name: node-disk-full
+    behavior: disk_full
+    capabilities: { gpu_model: RTX4090, vram_mb: 24576, driver: "550.54", runtimes: [cuda12, pytorch2] }
+    tiers: [standard]
+    fail_times: 1
+    fail_after_sec: 2
+
+  - name: node-a100
+    behavior: normal
+    capabilities: { gpu_model: A100, vram_mb: 40960, driver: "535.104", runtimes: [cuda12, cuda11, pytorch2] }
+    tiers: [standard, premium]
+
+  - name: node-3090
+    behavior: normal
+    capabilities: { gpu_model: RTX3090, vram_mb: 24576, driver: "535.104", runtimes: [cuda12] }
+    tiers: [standard]
+
+  - name: node-t4-disk-full
+    behavior: disk_full
+    capabilities: { gpu_model: T4, vram_mb: 16384, driver: "525.60", runtimes: [cuda11] }
+    tiers: [standard]
+    fail_times: 1
+    fail_after_sec: 2
+
+jobs:
+  - { tier: standard, min_vram_mb: 16384, artifact_required: false, count: 1, required_runtime: "pytorch2", gpu_models: [],     duration_sec: 5 }
+  - { tier: premium,  min_vram_mb: 32768, artifact_required: false, count: 1, required_runtime: "cuda12",   gpu_models: [A100], duration_sec: 5 }
+  - { tier: standard, min_vram_mb: 8192,  artifact_required: false, count: 3, required_runtime: "cuda12",   gpu_models: [],     duration_sec: 4 }
+  - { tier: standard, min_vram_mb: 8192,  artifact_required: false, count: 1, required_runtime: "cuda11",   gpu_models: [],     duration_sec: 4 }
