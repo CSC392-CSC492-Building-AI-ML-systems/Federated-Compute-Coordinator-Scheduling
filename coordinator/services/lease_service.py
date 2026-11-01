@@ -10,8 +10,16 @@ from coordinator.models.lease import (
     LeaseStatus,
     ProviderLeaseOffersResponse,
 )
-from coordinator.services.provider_service import ProviderNotFound
 from coordinator.store import Store
+
+
+# Declared ProviderNotFound locally here to keep the graph of dependencies linear
+class ProviderNotFound(Exception):
+    """The requested Provider does not exist; routes translate this to HTTP 404."""
+
+    def __init__(self, provider_id: str):
+        super().__init__(f"provider_id {provider_id!r} not found")
+        self.provider_id = provider_id
 
 
 async def accept_lease(lease_id):
