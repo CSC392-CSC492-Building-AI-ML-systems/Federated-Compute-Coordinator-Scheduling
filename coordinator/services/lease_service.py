@@ -3,8 +3,23 @@
 import uuid
 from datetime import datetime, timedelta
 
-from coordinator.models.lease import Lease, LeaseStatus
+from coordinator.models.lease import (
+    JobRequirements,
+    Lease,
+    LeaseOfferItem,
+    LeaseStatus,
+    ProviderLeaseOffersResponse,
+)
 from coordinator.store import Store
+
+
+# Declared ProviderNotFound locally here to keep the graph of dependencies linear
+class ProviderNotFound(Exception):
+    """The requested Provider does not exist; routes translate this to HTTP 404."""
+
+    def __init__(self, provider_id: str):
+        super().__init__(f"provider_id {provider_id!r} not found")
+        self.provider_id = provider_id
 
 
 async def accept_lease(lease_id):
@@ -35,3 +50,29 @@ def create_lease(
 
     store.leases[new_lease.lease_id] = new_lease
     return new_lease.model_copy(deep=True)
+
+
+async def get_provider_lease_offers(store: Store, provider_id: str) -> ProviderLeaseOffersResponse:
+    async with store.lock:
+        if provider_id not in store.providers:
+            raise ProviderNotFound(provider_id)
+
+        offers = []
+        for lease in store.leases.values():
+            if lease.provider_id == provider_id and lease.status == LeaseStatus.OFFERED:
+                job = store.jobs[lease.job_id]
+
+                requirements = JobRequirements(
+                    required_vram_mb=job.required_vram_mb,
+                    gpu_models=list(job.gpu_models),
+                    required_runtime=job.required_runtime,
+                    tier=job.tier,
+                )
+
+                offer_item = LeaseOfferItem(
+                    lease=lease.model_copy(deep=True), requirements=requirements
+                )
+
+                offers.append(offer_item)
+
+        return ProviderLeaseOffersResponse(offers=offers)
