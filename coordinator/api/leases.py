@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from coordinator.api.tools.dependencies import get_store
 from coordinator.api.tools.errors import ApiError
 from coordinator.models.lease import ProviderLeaseOffersResponse
-from coordinator.services.lease_service import get_provider_lease_offers, ProviderNotFound
+from coordinator.services.lease_service import ProviderNotFound, get_provider_lease_offers
 from coordinator.store import Store
 
 router = APIRouter()
