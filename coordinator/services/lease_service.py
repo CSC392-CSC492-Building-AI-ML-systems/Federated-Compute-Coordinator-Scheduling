@@ -34,6 +34,7 @@ class LeaseNotFound(Exception):
         super().__init__(f"lease_id {lease_id!r} not found")
         self.lease_id = lease_id
 
+
 class LeaseProviderMismatch(Exception):
     """The provider does not own this lease; routes translate this to HTTP 403 or 409."""
 
@@ -44,6 +45,7 @@ class LeaseProviderMismatch(Exception):
         self.lease_id = lease_id
         self.lease_provider_id = lease_provider_id
         self.request_provider_id = request_provider_id
+
 
 class InvalidLeaseState(Exception):
     """The lease is not in the correct state for this action; routes translate this to HTTP 409."""
@@ -189,11 +191,12 @@ async def get_provider_lease_offers(store: Store, provider_id: str) -> ProviderL
 
         return ProviderLeaseOffersResponse(offers=offers)
 
+
 async def reject_lease(store: Store, lease_id: str, request: RejectRequest) -> Lease:
     async with store.lock:
         if lease_id not in store.leases:
             raise LeaseNotFound(lease_id)
-        
+
         lease = store.leases[lease_id]
 
         if lease.provider_id != request.provider_id:
@@ -205,6 +208,8 @@ async def reject_lease(store: Store, lease_id: str, request: RejectRequest) -> L
         job = store.jobs[lease.job_id]
         job.rejected_provider_ids.add(lease.provider_id)
 
-        close_lease(store, lease_id, LeaseStatus.REJECTED, request.reason, datetime.now(timezone.utc), 0)
+        close_lease(
+            store, lease_id, LeaseStatus.REJECTED, request.reason, datetime.now(timezone.utc), 0
+        )
 
         return lease.model_copy(deep=True)
