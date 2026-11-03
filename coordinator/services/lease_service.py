@@ -1,7 +1,7 @@
 """Lease use cases. Names and signatures are placeholders for team design."""
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from coordinator.models.job import JobStatus
@@ -12,6 +12,7 @@ from coordinator.models.lease import (
     LeaseOutcome,
     LeaseStatus,
     ProviderLeaseOffersResponse,
+    RejectRequest,
 )
 from coordinator.policies.retry import should_retry
 from coordinator.store import Store
@@ -24,6 +25,36 @@ class ProviderNotFound(Exception):
     def __init__(self, provider_id: str):
         super().__init__(f"provider_id {provider_id!r} not found")
         self.provider_id = provider_id
+
+
+class LeaseNotFound(Exception):
+    """The requested Lease does not exist; routes translate this to HTTP 404."""
+
+    def __init__(self, lease_id: str):
+        super().__init__(f"lease_id {lease_id!r} not found")
+        self.lease_id = lease_id
+
+class LeaseProviderMismatch(Exception):
+    """The provider does not own this lease; routes translate this to HTTP 403 or 409."""
+
+    def __init__(self, lease_id: str, lease_provider_id: str, request_provider_id: str):
+        super().__init__(
+            f"lease {lease_id!r} is owned by {lease_provider_id!r}, but requested by {request_provider_id!r}"
+        )
+        self.lease_id = lease_id
+        self.lease_provider_id = lease_provider_id
+        self.request_provider_id = request_provider_id
+
+class InvalidLeaseState(Exception):
+    """The lease is not in the correct state for this action; routes translate this to HTTP 409."""
+
+    def __init__(self, lease_id: str, current_status: str, expected_status: str):
+        super().__init__(
+            f"lease {lease_id!r} is in state {current_status!r}, expected {expected_status!r}"
+        )
+        self.lease_id = lease_id
+        self.current_status = current_status
+        self.expected_status = expected_status
 
 
 async def accept_lease(lease_id):
@@ -157,3 +188,23 @@ async def get_provider_lease_offers(store: Store, provider_id: str) -> ProviderL
                 offers.append(offer_item)
 
         return ProviderLeaseOffersResponse(offers=offers)
+
+async def reject_lease(store: Store, lease_id: str, request: RejectRequest) -> Lease:
+    async with store.lock:
+        if lease_id not in store.leases:
+            raise LeaseNotFound(lease_id)
+        
+        lease = store.leases[lease_id]
+
+        if lease.provider_id != request.provider_id:
+            raise LeaseProviderMismatch(lease_id, lease.provider_id, request.provider_id)
+
+        if lease.status != LeaseStatus.OFFERED:
+            raise InvalidLeaseState(lease_id, lease.status, LeaseStatus.OFFERED)
+
+        job = store.jobs[lease.job_id]
+        job.rejected_provider_ids.add(lease.provider_id)
+
+        close_lease(store, lease_id, LeaseStatus.REJECTED, request.reason, datetime.now(timezone.utc), 0)
+
+        return lease.model_copy(deep=True)
