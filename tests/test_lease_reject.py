@@ -2,8 +2,8 @@
 
 from datetime import datetime, timezone
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 from coordinator.app import create_app
 from coordinator.models.job import Job, JobStatus
