@@ -40,7 +40,8 @@ class LeaseProviderMismatch(Exception):
 
     def __init__(self, lease_id: str, lease_provider_id: str, request_provider_id: str):
         super().__init__(
-            f"lease {lease_id!r} is owned by {lease_provider_id!r}, but requested by {request_provider_id!r}"
+            f"lease {lease_id!r} is owned by {lease_provider_id!r}, "
+            f"but requested by {request_provider_id!r}"
         )
         self.lease_id = lease_id
         self.lease_provider_id = lease_provider_id
