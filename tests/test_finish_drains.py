@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from coordinator.models.job import Job, JobStatus
 from coordinator.models.lease import Lease, LeaseStatus
 from coordinator.models.provider import Capabilities, Provider, ProviderStatus
 from coordinator.services import provider_service
@@ -46,7 +47,18 @@ def run_finish_drains(lease_status, now):
         store = Store()
         store.providers["p1"] = draining_provider(deadline=NOW + timedelta(seconds=60))
         store.leases["l1"] = lease_on_p1(lease_status)
-        await provider_service.finish_drains(store, now)
+        store.jobs["j1"] = Job(
+            job_id="j1",
+            status=JobStatus.RUNNING,
+            required_vram_mb=8192,
+            gpu_models=[],
+            required_runtime="cuda12",
+            tier="tier1",
+            current_lease_id="l1",
+            attempt_count=1,
+            created_at=NOW,
+        )
+        await provider_service.finish_drains(store, now, max_attempts=3)
         return store.providers["p1"].status
 
     return asyncio.run(scenario())

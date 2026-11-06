@@ -180,6 +180,7 @@ def test_new_job_record_starts_with_no_attempts_or_lease():
     assert job.attempt_count == 0
     assert job.current_lease_id is None
     assert job.rejected_provider_ids == set()
+    assert job.offer_timeout_counts == {}
     assert job.last_failure_reason is None
 
 
@@ -187,6 +188,12 @@ def test_rejected_provider_sets_are_not_shared_between_jobs():
     first, second = make_job(job_id="job-1"), make_job(job_id="job-2")
     first.rejected_provider_ids.add("provider-a")
     assert second.rejected_provider_ids == set()
+
+
+def test_offer_timeout_counts_are_not_shared_between_jobs():
+    first, second = make_job(job_id="job-1"), make_job(job_id="job-2")
+    first.offer_timeout_counts["provider-a"] = 1
+    assert second.offer_timeout_counts == {}
 
 
 def test_job_status_assignment_is_validated():

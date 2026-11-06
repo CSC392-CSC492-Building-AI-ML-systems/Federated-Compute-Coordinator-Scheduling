@@ -6,6 +6,7 @@ from typing import Optional
 
 from coordinator.models.job import JobStatus
 from coordinator.models.lease import (
+    InternalReason,
     JobRequirements,
     Lease,
     LeaseOfferItem,
@@ -131,6 +132,52 @@ def close_lease(
         job.status = JobStatus.QUEUED
     else:
         job.status = JobStatus.FAILED
+
+
+async def expire_offers(
+    store: Store, now: datetime, max_attempts: int, offer_timeouts_before_exclude: int
+) -> None:
+    """Expire unanswered offers and count timeouts for each Job/Provider pair."""
+    async with store.lock:
+        for lease in store.leases.values():
+            if lease.status != LeaseStatus.OFFERED or now < lease.offer_deadline:
+                continue
+
+            job = store.jobs[lease.job_id]
+            # Check before close_lease clears current_lease_id.
+            is_current = job.current_lease_id == lease.lease_id
+            close_lease(
+                store,
+                lease.lease_id,
+                LeaseStatus.EXPIRED,
+                InternalReason.OFFER_TIMEOUT.value,
+                now,
+                max_attempts,
+            )
+            if is_current:
+                count = job.offer_timeout_counts.get(lease.provider_id, 0) + 1
+                job.offer_timeout_counts[lease.provider_id] = count
+                if count >= offer_timeouts_before_exclude:
+                    job.rejected_provider_ids.add(lease.provider_id)
+
+
+async def expire_execution_leases(store: Store, now: datetime, max_attempts: int) -> None:
+    """Close accepted Leases that were not renewed before their deadline."""
+    async with store.lock:
+        for lease in store.leases.values():
+            if (
+                lease.status == LeaseStatus.ACTIVE
+                and lease.expires_at is not None
+                and now >= lease.expires_at
+            ):
+                close_lease(
+                    store,
+                    lease.lease_id,
+                    LeaseStatus.EXPIRED,
+                    InternalReason.EXECUTION_TIMEOUT.value,
+                    now,
+                    max_attempts,
+                )
 
 
 async def get_provider_lease_offers(store: Store, provider_id: str) -> ProviderLeaseOffersResponse:

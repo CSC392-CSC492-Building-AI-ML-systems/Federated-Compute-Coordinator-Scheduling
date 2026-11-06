@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
 
-from coordinator.models.job import JobStatus
 from coordinator.models.lease import TERMINAL_LEASE_STATUSES, InternalReason, LeaseStatus
 from coordinator.models.provider import (
     DrainRequest,
@@ -9,6 +8,7 @@ from coordinator.models.provider import (
     ProviderRegisterRequest,
     ProviderStatus,
 )
+from coordinator.services.lease_service import close_lease
 from coordinator.store import Store
 
 
@@ -94,12 +94,14 @@ async def heartbeat(
         return provider.model_copy(deep=True)
 
 
-async def expire_heartbeats(store: Store, now: datetime, timeout_seconds: float) -> None:
+async def expire_heartbeats(
+    store: Store, now: datetime, timeout_seconds: float, max_attempts: int
+) -> None:
     """Monitor check: Providers whose last heartbeat is older than the timeout.
 
     ACTIVE -> STALE; DRAINING -> DRAINED (new rule, see docs/provider-tasks).
-    Revoke live Leases with reason PROVIDER_STALE and requeue their current Jobs.
-    Requeueing leaves attempt_count unchanged; retry budgets are not implemented.
+    Revoke live Leases with reason PROVIDER_STALE. Accepted work goes through
+    the retry check; unanswered offers do not use an attempt.
     """
     async with store.lock:
         expired_provider_ids = set()
@@ -123,14 +125,14 @@ async def expire_heartbeats(store: Store, now: datetime, timeout_seconds: float)
                 LeaseStatus.OFFERED,
                 LeaseStatus.ACTIVE,
             ):
-                lease.status = LeaseStatus.REVOKED
-                lease.reason = InternalReason.PROVIDER_STALE.value
-                job = store.jobs[lease.job_id]
-                if job.current_lease_id == lease.lease_id:
-                    job.current_lease_id = None
-                    if job.status in (JobStatus.STARTING, JobStatus.RUNNING):
-                        job.last_failure_reason = lease.reason
-                        job.status = JobStatus.QUEUED
+                close_lease(
+                    store,
+                    lease.lease_id,
+                    LeaseStatus.REVOKED,
+                    InternalReason.PROVIDER_STALE.value,
+                    now,
+                    max_attempts,
+                )
 
 
 def _has_live_lease(store: Store, provider_id: str) -> bool:
@@ -141,25 +143,32 @@ def _has_live_lease(store: Store, provider_id: str) -> bool:
     return False
 
 
-async def finish_drains(store: Store, now: datetime) -> None:
+async def finish_drains(store: Store, now: datetime, max_attempts: int) -> None:
     """Monitor check: DRAINING Providers with no live Lease, or past drain_deadline.
-    DRAINING -> DRAINED. Later: reclaim remaining Leases with reason DRAIN_RECLAIM.
-
-    In other words, check draining -> drain or continue
+    Reclaim remaining Leases with DRAIN_RECLAIM before marking a Provider DRAINED.
     """
     async with store.lock:
         for provider in store.providers.values():
             if provider.status != ProviderStatus.DRAINING:
                 continue
 
-            if provider.drain_deadline is not None:
-                past_deadline = now >= provider.drain_deadline
-
-                if _has_live_lease(store, provider.provider_id) and not past_deadline:
+            if _has_live_lease(store, provider.provider_id):
+                # Only reclaim live work once its deadline is known and reached.
+                if provider.drain_deadline is None or now < provider.drain_deadline:
                     continue
-
-            # TODO: when past_deadline, revoke remaining Leases (DRAIN_RECLAIM)
-            # and send their Jobs to the retry check before marking DRAINEDD. =)
+                for lease in store.leases.values():
+                    if lease.provider_id == provider.provider_id and lease.status in (
+                        LeaseStatus.OFFERED,
+                        LeaseStatus.ACTIVE,
+                    ):
+                        close_lease(
+                            store,
+                            lease.lease_id,
+                            LeaseStatus.REVOKED,
+                            InternalReason.DRAIN_RECLAIM.value,
+                            now,
+                            max_attempts,
+                        )
             provider.status = ProviderStatus.DRAINED
 
 
