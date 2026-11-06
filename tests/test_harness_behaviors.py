@@ -3,7 +3,15 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from harness.behaviors import ACCEPT, Behavior, JobPlan, OfferDecision, make_behavior
+from harness.behaviors import (
+    ACCEPT,
+    Behavior,
+    ClockSkew,
+    Disappear,
+    JobPlan,
+    OfferDecision,
+    make_behavior,
+)
 from harness.provider import FakeProvider
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -16,11 +24,13 @@ class RecordingClient:
         self.offers = [{"lease_id": "lease-1", "job_id": "job-1"}]
         self.rejects = []
         self.reports = []
+        self.provider_times = []
 
     async def register_provider(self, data):
         return {"status": "ACTIVE"}
 
     async def heartbeat(self, provider_id, provider_time=None):
+        self.provider_times.append(provider_time)
         return {"status": "ACTIVE"}
 
     async def get_lease_offers(self, provider_id):
@@ -72,8 +82,8 @@ def test_make_behavior_builds_normal_with_params():
 
 
 def test_planned_behavior_is_not_implemented_yet():
-    with pytest.raises(NotImplementedError, match="disappear"):
-        make_behavior("disappear", {})
+    with pytest.raises(NotImplementedError, match="disk_full"):
+        make_behavior("disk_full", {})
 
 
 def test_unknown_behavior_fails_fast():
@@ -140,3 +150,45 @@ def test_provider_stops_when_silent():
     assert provider.heartbeat_count == 2
     assert provider.is_heartbeating is False
     assert event_names(provider).count("went_silent") == 1
+
+
+def test_make_behavior_builds_disappear():
+    behavior = make_behavior("disappear", {"disappear_after_heartbeats": 3})
+    assert type(behavior) is Disappear
+    assert behavior.after_heartbeats == 3
+
+
+def test_disappear_goes_silent_correctly():
+    client = RecordingClient()
+    params = {"disappear_after_heartbeats": 3}
+    provider = run(client, 10, behavior=Disappear(params), params=params)
+    assert provider.heartbeat_count == 3
+    assert provider.is_heartbeating is False
+    # Goes silent permanently
+    names = event_names(provider)
+    assert names.count("went_silent") == 1
+    assert "heartbeat" not in names[names.index("went_silent") :]
+
+
+def test_disappear_keeps_lease():
+    # Offer taken at t=1, silent at t=3 (after 2 heartbeats), job would finish at t=6
+    client = RecordingClient()
+    params = {"disappear_after_heartbeats": 2, "duration_sec": 5}
+    provider = run(client, 10, behavior=Disappear(params), params=params)
+    assert provider.lease_id == "lease-1"
+    assert client.reports == []
+
+
+def test_make_behavior_builds_clock_skew():
+    behavior = make_behavior("clock_skew", {"skew_seconds": -10})
+    assert type(behavior) is ClockSkew
+    assert behavior.provider_time(None, T0) == (T0 - timedelta(seconds=10)).isoformat()
+
+
+def test_clock_skew_sends_skewed_time_and_runs_normally():
+    client = RecordingClient()
+    params = {"skew_seconds": 3600, "duration_sec": 5}
+    run(client, 6, behavior=ClockSkew(params), params=params)
+    assert client.provider_times[0] == (T0 + timedelta(seconds=3601)).isoformat()
+    assert len(client.provider_times) == 6
+    assert client.reports == [("lease-1", "SUCCESS", None)]
