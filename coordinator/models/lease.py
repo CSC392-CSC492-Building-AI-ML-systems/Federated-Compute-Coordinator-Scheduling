@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from coordinator.models.job import JobStatus
+
 
 class LeaseStatus(str, Enum):
     OFFERED = "OFFERED"
@@ -115,3 +117,11 @@ class LeaseOfferItem(BaseModel):
 
 class ProviderLeaseOffersResponse(BaseModel):
     offers: list[LeaseOfferItem]
+
+
+class RejectResponse(BaseModel):
+    """Body of the 200 response to POST /leases/{lease_id}/reject (contract section 6)."""
+
+    lease_id: str
+    lease_status: LeaseStatus
+    job_status: JobStatus
