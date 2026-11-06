@@ -1,7 +1,7 @@
 """Lease use cases. Names and signatures are placeholders for team design."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
 
 from coordinator.models.job import JobStatus
@@ -13,6 +13,7 @@ from coordinator.models.lease import (
     LeaseStatus,
     ProviderLeaseOffersResponse,
     RejectRequest,
+    RejectResponse,
 )
 from coordinator.policies.retry import should_retry
 from coordinator.store import Store
@@ -193,7 +194,9 @@ async def get_provider_lease_offers(store: Store, provider_id: str) -> ProviderL
         return ProviderLeaseOffersResponse(offers=offers)
 
 
-async def reject_lease(store: Store, lease_id: str, request: RejectRequest) -> Lease:
+async def reject_lease(
+    store: Store, lease_id: str, request: RejectRequest, now: datetime
+) -> RejectResponse:
     async with store.lock:
         if lease_id not in store.leases:
             raise LeaseNotFound(lease_id)
@@ -204,13 +207,15 @@ async def reject_lease(store: Store, lease_id: str, request: RejectRequest) -> L
             raise LeaseProviderMismatch(lease_id, lease.provider_id, request.provider_id)
 
         if lease.status != LeaseStatus.OFFERED:
-            raise InvalidLeaseState(lease_id, lease.status, LeaseStatus.OFFERED)
+            raise InvalidLeaseState(lease_id, lease.status.value, LeaseStatus.OFFERED.value)
 
         job = store.jobs[lease.job_id]
         job.rejected_provider_ids.add(lease.provider_id)
 
-        close_lease(
-            store, lease_id, LeaseStatus.REJECTED, request.reason, datetime.now(timezone.utc), 0
-        )
+        close_lease(store, lease_id, LeaseStatus.REJECTED, request.reason.value, now, 0)
 
-        return lease.model_copy(deep=True)
+        return RejectResponse(
+            lease_id=lease.lease_id,
+            lease_status=lease.status,
+            job_status=job.status.value,
+        )

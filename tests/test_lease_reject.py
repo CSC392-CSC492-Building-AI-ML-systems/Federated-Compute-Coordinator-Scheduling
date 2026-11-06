@@ -84,23 +84,23 @@ def client():
 
 
 @pytest.mark.anyio
-async def test_service_reject_lease_happy_path_and_deep_copy():
+async def test_service_reject_lease_happy_path():
     store = Store()
     _, job, lease = _seed_offered_lease(store, provider_id="prov-1", job_id="job-1")
 
     req = RejectRequest(provider_id="prov-1", reason=RejectReason.LOCAL_BUSY)
-    returned = await reject_lease(store, lease.lease_id, req)
+    returned = await reject_lease(store, lease.lease_id, req, now=FIXED_NOW)
 
-    # Returned Lease fields
+    # Returned RejectResponse fields
     assert returned.lease_id == lease.lease_id
-    assert returned.status == LeaseStatus.REJECTED
-    assert returned.reason == RejectReason.LOCAL_BUSY.value
-    assert returned.outcome is None
+    assert returned.lease_status == LeaseStatus.REJECTED
+    assert returned.job_status == JobStatus.QUEUED.value
 
     # Store Lease state
     stored_lease = store.leases[lease.lease_id]
     assert stored_lease.status == LeaseStatus.REJECTED
     assert stored_lease.reason == RejectReason.LOCAL_BUSY.value
+    assert stored_lease.outcome is None
 
     # Store Job state: provider added to rejected_provider_ids, still QUEUED, 0 attempts used
     stored_job = store.jobs[job.job_id]
@@ -110,9 +110,9 @@ async def test_service_reject_lease_happy_path_and_deep_copy():
     assert stored_job.attempt_count == 0
     assert stored_job.last_failure_reason is None
 
-    # Verify deep-copy isolation
-    returned.reason = "MUTATED_IN_CALLER"
-    assert store.leases[lease.lease_id].reason == RejectReason.LOCAL_BUSY.value
+    # Verify response mutation does not affect stored state
+    returned.lease_status = LeaseStatus.OFFERED
+    assert store.leases[lease.lease_id].status == LeaseStatus.REJECTED
 
 
 @pytest.mark.anyio
@@ -121,7 +121,7 @@ async def test_service_reject_lease_not_found():
     req = RejectRequest(provider_id="prov-1", reason=RejectReason.LOCAL_BUSY)
 
     with pytest.raises(LeaseNotFound):
-        await reject_lease(store, "lease-does-not-exist", req)
+        await reject_lease(store, "lease-does-not-exist", req, now=FIXED_NOW)
 
 
 @pytest.mark.anyio
@@ -131,7 +131,7 @@ async def test_service_reject_lease_provider_mismatch():
 
     req = RejectRequest(provider_id="prov-intruder", reason=RejectReason.LOCAL_BUSY)
     with pytest.raises(LeaseProviderMismatch):
-        await reject_lease(store, lease.lease_id, req)
+        await reject_lease(store, lease.lease_id, req, now=FIXED_NOW)
 
     # State must remain untouched
     assert store.leases[lease.lease_id].status == LeaseStatus.OFFERED
@@ -144,14 +144,14 @@ async def test_service_reject_lease_invalid_state_when_active():
     store = Store()
     _, job, lease = _seed_offered_lease(store, provider_id="prov-1", job_id="job-1")
 
-    # FIX: Mutate the authoritative objects in the store, not the local copies!
+    # Mutate the authoritative objects in the store
     store.leases[lease.lease_id].status = LeaseStatus.ACTIVE
     store.jobs[job.job_id].status = JobStatus.RUNNING
     store.jobs[job.job_id].attempt_count = 1
 
     req = RejectRequest(provider_id="prov-1", reason=RejectReason.LOCAL_BUSY)
     with pytest.raises(InvalidLeaseState):
-        await reject_lease(store, lease.lease_id, req)
+        await reject_lease(store, lease.lease_id, req, now=FIXED_NOW)
 
     # Active lease and running job must not be disrupted
     assert store.leases[lease.lease_id].status == LeaseStatus.ACTIVE
@@ -175,11 +175,15 @@ def test_api_reject_lease_200_and_removes_from_offers(client: TestClient):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["lease_id"] == lease.lease_id
-    assert body["status"] == "REJECTED"
-    assert body["reason"] == "LOCAL_BUSY"
+    assert body == {
+        "lease_id": lease.lease_id,
+        "lease_status": "REJECTED",
+        "job_status": "QUEUED",
+    }
 
-    # Job invariants
+    # Store Lease & Job invariants
+    assert store.leases[lease.lease_id].status == LeaseStatus.REJECTED
+    assert store.leases[lease.lease_id].reason == "LOCAL_BUSY"
     assert "prov-1" in store.jobs[job.job_id].rejected_provider_ids
     assert store.jobs[job.job_id].current_lease_id is None
     assert store.jobs[job.job_id].status == JobStatus.QUEUED
@@ -236,7 +240,7 @@ def test_api_reject_lease_409_when_active(client: TestClient):
     store: Store = client.app.state.store
     _, job, lease = _seed_offered_lease(store, provider_id="prov-1", job_id="job-1")
 
-    # FIX: Mutate the authoritative objects in the store!
+    # Mutate the authoritative objects in the store
     store.leases[lease.lease_id].status = LeaseStatus.ACTIVE
     store.jobs[job.job_id].status = JobStatus.RUNNING
 
