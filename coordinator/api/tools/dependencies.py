@@ -1,4 +1,4 @@
-"""Shared FastAPI dependencies: hand the Store and the current time to route handlers.
+"""Shared FastAPI dependencies: hand the Store, the settings and the current time to routes.
 
 Why this file exists (it is not in the original scaffold layout):
 - Routes need to pass "the one Store" to services, but must not create it themselves.
@@ -14,6 +14,7 @@ from datetime import datetime
 
 from fastapi import Request
 
+from coordinator.settings import Settings
 from coordinator.store import Store
 
 
@@ -21,6 +22,12 @@ def get_store(request: Request) -> Store:
     # The app owns one Store (created in its lifespan). Reading it from app.state
     # lets each test app get a fresh, isolated Store.
     return request.app.state.store
+
+
+def get_settings(request: Request) -> Settings:
+    # create_app loads the settings once. A test app can pass its own.
+    # Routes hand services only the numbers they need, not the whole Settings.
+    return request.app.state.settings
 
 
 def get_received_at(request: Request) -> datetime:
