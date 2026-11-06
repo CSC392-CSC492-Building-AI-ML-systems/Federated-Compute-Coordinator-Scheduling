@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from typing import Callable
 
-from coordinator.services import provider_service
+from coordinator.services import lease_service, provider_service
 from coordinator.settings import Settings
 from coordinator.store import Store
 
@@ -12,11 +12,17 @@ logger = logging.getLogger(__name__)
 
 async def run_monitor_tick(store: Store, now: datetime, settings: Settings) -> None:
     # 1 Heartbeat timeout: ACTIVE -> STALE, DRAINING -> DRAINED.
-    await provider_service.expire_heartbeats(store, now, settings.heartbeat_timeout_seconds)
+    await provider_service.expire_heartbeats(
+        store, now, settings.heartbeat_timeout_seconds, settings.max_attempts
+    )
     # 2 Drain end: DRAINING with no live Lease, or past drain_deadline -> DRAINED.
     #    Runs after step 1, so it only sees Providers that are still in contact.
-    await provider_service.finish_drains(store, now)
-    # TODO: offer expiry and execution (Lease) timeout once Leases exist.
+    await provider_service.finish_drains(store, now, settings.max_attempts)
+    # Provider loss and drain reclaim take precedence over Lease timeouts.
+    await lease_service.expire_offers(
+        store, now, settings.max_attempts, settings.offer_timeouts_before_exclude
+    )
+    await lease_service.expire_execution_leases(store, now, settings.max_attempts)
 
 
 async def monitor_loop(store: Store, clock: Callable[[], datetime], settings: Settings) -> None:

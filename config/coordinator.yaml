@@ -15,7 +15,7 @@ monitor_interval_seconds: 1
 # How often the job scheduler runs.
 scheduler_interval_seconds: 1
 
-# --- Agreed values below are not read by any code yet (Lease and retry work). ---
+# Lease timing and retry limits.
 
 # How long a Provider has to accept or reject an offer.
 # Rule: Harness poll interval (1 s) <= this / 2.

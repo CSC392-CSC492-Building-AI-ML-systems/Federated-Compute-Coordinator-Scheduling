@@ -19,8 +19,7 @@ class Settings(BaseModel):
     # Add this line so the scheduler knows how long to sleep
     scheduler_interval_seconds: float = Field(gt=0)
 
-    # From the team's timing parameter table. Not read by any code yet: they are
-    # here so the Lease and retry work can use settings instead of hard-coded numbers.
+    # Lease deadlines and retry limits from the team's timing parameter table.
     offer_timeout_seconds: float = Field(gt=0)
     lease_duration_seconds: float = Field(gt=0)
     max_attempts: int = Field(ge=1)
