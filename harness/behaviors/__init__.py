@@ -8,9 +8,7 @@ from harness.behaviors.base import ACCEPT, Behavior, JobPlan, OfferDecision, job
 from harness.behaviors.lease import CapabilityLie, RejectLease
 from harness.behaviors.liveness import ClockSkew, Disappear
 
-BEHAVIORS = {
-    cls.name: cls for cls in (Behavior, ClockSkew, Disappear, RejectLease, CapabilityLie)
-}
+BEHAVIORS = {cls.name: cls for cls in (Behavior, ClockSkew, Disappear, RejectLease, CapabilityLie)}
 
 PLANNED = frozenset(
     {
