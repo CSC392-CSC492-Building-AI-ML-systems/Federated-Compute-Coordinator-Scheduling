@@ -109,6 +109,8 @@ class FakeProvider:
     async def tick(self, now):
         """One tick: heartbeat if due, then take an offer, finish the job or renew it."""
         if not self.is_heartbeating:
+            if self.status == "DRAINED" and self.lease_id is not None:
+                await self.finish_job_after_drain(now)
             return
         if self.behavior.is_silent(self, now):
             self.is_heartbeating = False
@@ -219,6 +221,21 @@ class FakeProvider:
         self.clear_job()
         await self.client.report(lease_id, self.provider_id, plan.outcome, plan.reason)
         self.log_event(now, "reported", lease_id=lease_id, outcome=plan.outcome, reason=plan.reason)
+
+    async def finish_job_after_drain(self, now):
+        """The coordinator has reclaimed the lease, but the job keeps running
+        locally. Report it once when it finishes, the coordinator should reject
+        the late report. A more efficient design would be for the provider to
+        kill the job once it notices it is DRAINED, but this is
+        necessary to test rejection of late reports."""
+        if now < self.job_finishes_at:
+            return
+        try:
+            await self.finish_job(now)
+        except CoordinatorError as error:
+            self.log_error(now, error)
+        except httpx.TransportError as error:
+            self.log_network_error(now, error)
 
     def clear_job(self):
         """Forget the current lease and job."""

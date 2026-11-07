@@ -8,10 +8,12 @@ from harness.behaviors import (
     Behavior,
     ClockSkew,
     Disappear,
+    DrainMidJob,
     JobPlan,
     OfferDecision,
     make_behavior,
 )
+from harness.errors import CoordinatorError
 from harness.provider import FakeProvider
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -25,13 +27,20 @@ class RecordingClient:
         self.rejects = []
         self.reports = []
         self.provider_times = []
+        self.drains = []
+        self.status = "ACTIVE"
 
     async def register_provider(self, data):
         return {"status": "ACTIVE"}
 
     async def heartbeat(self, provider_id, provider_time=None):
         self.provider_times.append(provider_time)
-        return {"status": "ACTIVE"}
+        return {"status": self.status}
+
+    async def drain(self, provider_id, grace_period_seconds):
+        self.drains.append(grace_period_seconds)
+        self.status = "DRAINING"
+        return {"status": self.status}
 
     async def get_lease_offers(self, provider_id):
         offers, self.offers = self.offers, []
@@ -192,3 +201,65 @@ def test_clock_skew_sends_skewed_time_and_runs_normally():
     assert client.provider_times[0] == (T0 + timedelta(seconds=3601)).isoformat()
     assert len(client.provider_times) == 6
     assert client.reports == [("lease-1", "SUCCESS", None)]
+
+
+def test_make_behavior_builds_drain_mid_job():
+    behavior = make_behavior("drain_mid_job", {"drain_after_sec": 2, "grace_period_seconds": 6})
+    assert type(behavior) is DrainMidJob
+    assert (behavior.drain_after_sec, behavior.grace_period_seconds) == (2, 6)
+
+
+def test_drain_mid_job_drains_once_after_drain_after_sec():
+    client = RecordingClient()
+    params = {"drain_after_sec": 2, "grace_period_seconds": 6, "duration_sec": 5}
+    provider = run(client, 2, behavior=DrainMidJob(params), params=params)
+    assert client.drains == []
+
+    client = RecordingClient()
+    provider = run(client, 10, behavior=DrainMidJob(params), params=params)
+    assert client.drains == [6]
+    assert provider.status == "DRAINING"
+
+
+def test_drain_mid_job_keeps_running_and_reports_the_job():
+    client = RecordingClient()
+    params = {"drain_after_sec": 2, "grace_period_seconds": 6, "duration_sec": 5}
+    run(client, 6, behavior=DrainMidJob(params), params=params)
+    assert client.reports == [("lease-1", "SUCCESS", None)]
+
+
+def test_drain_mid_job_takes_no_new_offers_after_draining():
+    client = RecordingClient()
+    params = {"drain_after_sec": 2, "grace_period_seconds": 6, "duration_sec": 5}
+    provider = run(client, 6, behavior=DrainMidJob(params), params=params)
+    client.offers = [{"lease_id": "lease-2", "job_id": "job-2"}]
+    asyncio.run(provider.tick(T0 + timedelta(seconds=7)))
+    assert provider.lease_id is None
+    assert len(client.offers) == 1
+
+
+class DrainingClient(RecordingClient):
+    """Like the coordinator, once DRAINING, heartbeats should get a
+    409 and late reports should be rejected."""
+
+    async def heartbeat(self, provider_id, provider_time=None):
+        if self.status == "DRAINING":
+            raise CoordinatorError(409, "INVALID_STATE_TRANSITION", "provider is drained")
+        return await super().heartbeat(provider_id, provider_time)
+
+    async def report(self, lease_id, provider_id, outcome, reason=None):
+        await super().report(lease_id, provider_id, outcome, reason)
+        raise CoordinatorError(409, "INVALID_STATE_TRANSITION", "lease was reclaimed")
+
+
+def test_drained_provider_still_reports_its_job_once():
+    # Accepted at t=1, drains at t=3, drained at t=4, job finishes at t=6
+    client = DrainingClient()
+    params = {"drain_after_sec": 2, "grace_period_seconds": 1, "duration_sec": 5}
+    provider = run(client, 10, behavior=DrainMidJob(params), params=params)
+    assert provider.status == "DRAINED"
+    assert client.reports == [("lease-1", "SUCCESS", None)]
+    assert provider.lease_id is None
+    names = event_names(provider)
+    assert names.index("drained") < names.index("request_failed", names.index("drained") + 1)
+    assert "reported" not in names

@@ -5,15 +5,15 @@ drain_mid_job, upload_fail, disk_full.
 """
 
 from harness.behaviors.base import ACCEPT, Behavior, JobPlan, OfferDecision
+from harness.behaviors.execution import DrainMidJob
 from harness.behaviors.liveness import ClockSkew, Disappear
 
-BEHAVIORS = {cls.name: cls for cls in (Behavior, ClockSkew, Disappear)}
+BEHAVIORS = {cls.name: cls for cls in (Behavior, ClockSkew, Disappear, DrainMidJob)}
 
 PLANNED = frozenset(
     {
         "reject_lease",
         "capability_lie",
-        "drain_mid_job",
         "upload_fail",
         "disk_full",
     }
@@ -35,6 +35,7 @@ __all__ = [
     "Behavior",
     "ClockSkew",
     "Disappear",
+    "DrainMidJob",
     "JobPlan",
     "OfferDecision",
     "make_behavior",
