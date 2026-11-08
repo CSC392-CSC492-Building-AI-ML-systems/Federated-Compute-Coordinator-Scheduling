@@ -56,8 +56,9 @@ class RecordingClient:
         return {"status": "DRAINING"}
 
     async def get_lease_offers(self, provider_id):
-        offers, self.offers = self.offers, []
-        return offers
+        if self.offers:
+            return [self.offers.pop(0)]
+        return []
 
     async def accept(self, lease_id, provider_id):
         self.accepts.append(lease_id)
