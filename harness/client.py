@@ -93,9 +93,21 @@ class CoordinatorClient:
     # Leases, in lifecycle order: offer -> accept/reject -> started -> renew -> report
 
     async def get_lease_offers(self, provider_id):
-        """Return this provider's OFFERED leases, each with job_requirements."""
+        """Return this provider's OFFERED leases as flat dicts:
+        {"lease_id", "job_id", "requirements": {required_vram_mb, gpu_models,
+        required_runtime, tier}}.
+
+        The coordinator sends {"offers": [{"lease": {...}, "requirements": {...}}]}.
+        """
         body = await self._request("GET", f"/providers/{provider_id}/lease-offers")
-        return body["leases"]
+        return [
+            {
+                "lease_id": item["lease"]["lease_id"],
+                "job_id": item["lease"]["job_id"],
+                "requirements": item["requirements"],
+            }
+            for item in body["offers"]
+        ]
 
     async def accept(self, lease_id, provider_id):
         """Accept a lease.

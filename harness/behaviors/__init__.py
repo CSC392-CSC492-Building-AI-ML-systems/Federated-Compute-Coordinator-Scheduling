@@ -6,6 +6,7 @@ drain_mid_job, upload_fail, disk_full.
 
 from harness.behaviors.base import ACCEPT, Behavior, JobPlan, OfferDecision
 from harness.behaviors.execution import DiskFull, DrainMidJob, UploadFail
+from harness.behaviors.lease import CapabilityLie, RejectLease
 from harness.behaviors.liveness import ClockSkew, Disappear
 
 BEHAVIORS = {
@@ -17,15 +18,12 @@ BEHAVIORS = {
         DiskFull,
         DrainMidJob,
         UploadFail,
+        RejectLease,
+        CapabilityLie,
     )
 }
 
-PLANNED = frozenset(
-    {
-        "reject_lease",
-        "capability_lie",
-    }
-)
+PLANNED = frozenset({})
 
 
 def make_behavior(name, params=None):
@@ -41,12 +39,15 @@ __all__ = [
     "ACCEPT",
     "BEHAVIORS",
     "Behavior",
+    "CapabilityLie",
     "ClockSkew",
     "Disappear",
     "JobPlan",
     "OfferDecision",
+    "RejectLease",
+    "job_requirements",
     "make_behavior",
-    "disk_full",
-    "upload_fail",
-    "drain_mid_job",
+    "DiskFull",
+    "UploadFail",
+    "DrainMidJob",
 ]

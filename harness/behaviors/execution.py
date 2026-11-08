@@ -4,9 +4,8 @@ from harness.behaviors.base import Behavior, JobPlan
 
 
 class UploadFail(Behavior):
-    """Provider running full job but sends fail signal
-    due to being unable to transfer, network and other
-    wide range of possible issues."""
+    """Provider finishes the job but artifact upload fails for the
+    first fail_times jobs."""
 
     name = "upload_fail"
 
@@ -23,6 +22,9 @@ class UploadFail(Behavior):
 
 
 class DiskFull(Behavior):
+    """Provider disk fills up after fail_after_sec for the first
+    fail_times jobs."""
+
     name = "disk_full"
 
     def __init__(self, params):
@@ -39,6 +41,9 @@ class DiskFull(Behavior):
 
 
 class DrainMidJob(Behavior):
+    """Receive reclaim/drain signal while executing a job.
+    Success or failure depends on grace is missed or not."""
+
     name = "drain_mid_job"
 
     def __init__(self, params):

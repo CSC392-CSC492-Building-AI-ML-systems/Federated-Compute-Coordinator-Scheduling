@@ -6,12 +6,14 @@ import pytest
 from harness.behaviors import (
     ACCEPT,
     Behavior,
+    CapabilityLie,
     ClockSkew,
     Disappear,
     DiskFull,
     DrainMidJob,
     JobPlan,
     OfferDecision,
+    RejectLease,
     UploadFail,
     make_behavior,
 )
@@ -23,8 +25,20 @@ T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 class RecordingClient:
     """Fake coordinator: always ACTIVE, hands out one offer, records lease calls."""
 
-    def __init__(self):
-        self.offers = [{"lease_id": "lease-1", "job_id": "job-1"}]
+    def __init__(self, required_vram_mb=8192):
+        self.offers = [
+            {
+                "lease_id": "lease-1",
+                "job_id": "job-1",
+                "requirements": {
+                    "required_vram_mb": required_vram_mb,
+                    "gpu_models": [],
+                    "required_runtime": "cuda12",
+                    "tier": "standard",
+                },
+            }
+        ]
+        self.accepts = []
         self.rejects = []
         self.reports = []
         self.provider_times = []
@@ -46,7 +60,7 @@ class RecordingClient:
         return offers
 
     async def accept(self, lease_id, provider_id):
-        pass
+        self.accepts.append(lease_id)
 
     async def reject(self, lease_id, provider_id, reason):
         self.rejects.append((lease_id, reason))
@@ -87,11 +101,6 @@ def test_make_behavior_builds_normal_with_params():
     behavior = make_behavior("normal", {"duration_sec": 5})
     assert type(behavior) is Behavior
     assert behavior.params == {"duration_sec": 5}
-
-
-def test_planned_behavior_is_not_implemented_yet():
-    with pytest.raises(NotImplementedError, match="disk_full"):
-        make_behavior("disk_full", {})
 
 
 def test_unknown_behavior_fails_fast():
@@ -202,6 +211,9 @@ def test_clock_skew_sends_skewed_time_and_runs_normally():
     assert client.reports == [("lease-1", "SUCCESS", None)]
 
 
+# execution
+
+
 def test_make_behavior_builds_execution_behaviors():
     b_upload = make_behavior("upload_fail", {"fail_times": 2})
     assert type(b_upload) is UploadFail
@@ -261,3 +273,86 @@ def test_drain_mid_job_triggers_drain_at_specified_time():
     assert client.drains == [("p1", 6)]
     assert provider.status == "DRAINING"
     assert "drain_started" in event_names(provider)
+
+
+# reject_lease
+
+
+def test_make_behavior_builds_reject_lease_with_default_reason():
+    behavior = make_behavior("reject_lease", {})
+    assert type(behavior) is RejectLease
+    assert behavior.reason == "LOCAL_BUSY"
+
+
+def test_reject_lease_rejects_unknown_reason_at_init():
+    with pytest.raises(ValueError, match="BUSY_LOL"):
+        RejectLease({"reject_reason": "BUSY_LOL"})
+
+
+def test_reject_lease_decides_reject_with_reason():
+    decision = RejectLease({"reject_reason": "TEMP_UNAVAILABLE"}).decide_offer(None, {})
+    assert (decision.accept, decision.reason) == (False, "TEMP_UNAVAILABLE")
+
+
+def test_reject_lease_provider_rejects_and_never_runs_a_job():
+    client = RecordingClient()
+    params = {"reject_reason": "LOCAL_BUSY"}
+    provider = run(client, 8, behavior=RejectLease(params), params=params)
+    assert client.rejects == [("lease-1", "LOCAL_BUSY")]
+    assert client.accepts == []
+    assert client.reports == []
+    rejected = [e for e in provider.events if e["event"] == "rejected"]
+    assert rejected[0]["job_id"] == "job-1"
+    assert rejected[0]["reason"] == "LOCAL_BUSY"
+    # Rejecting is not a failure: it keeps heartbeating and stays available
+    assert provider.is_heartbeating is True
+
+
+# capability_lie
+
+
+def test_make_behavior_builds_capability_lie():
+    behavior = make_behavior("capability_lie", {"actual_vram_mb": 6144})
+    assert type(behavior) is CapabilityLie
+    assert (behavior.actual_vram_mb, behavior.fail_after_sec) == (6144, 1)
+
+
+def test_capability_lie_needs_actual_vram():
+    with pytest.raises(ValueError, match="actual_vram_mb"):
+        CapabilityLie({})
+
+
+def offer_needing(vram_mb):
+    return {"lease_id": "l", "job_id": "j", "requirements": {"required_vram_mb": vram_mb}}
+
+
+def test_capability_lie_fails_job_that_needs_more_than_real_vram():
+    plan = CapabilityLie({"actual_vram_mb": 6144}).plan_job(None, offer_needing(16384), 5)
+    assert (plan.run_sec, plan.outcome, plan.reason) == (1, "FAILURE", "CAPABILITY_MISMATCH")
+
+
+def test_capability_lie_runs_job_that_fits_real_vram_normally():
+    behavior = CapabilityLie({"actual_vram_mb": 6144})
+    for vram_mb in (4096, 6144):
+        plan = behavior.plan_job(None, offer_needing(vram_mb), 5)
+        assert (plan.run_sec, plan.outcome, plan.reason) == (5, "SUCCESS", None)
+
+
+def test_capability_lie_honours_fail_after_sec():
+    plan = CapabilityLie({"actual_vram_mb": 6144, "fail_after_sec": 3}).plan_job(
+        None, offer_needing(16384), 5
+    )
+    assert plan.run_sec == 3
+
+
+def test_capability_lie_provider_accepts_then_reports_mismatch_after_1s():
+    # Accepted at t=1, fails at t=2 instead of finishing at t=6
+    client = RecordingClient(required_vram_mb=16384)
+    params = {"actual_vram_mb": 6144, "duration_sec": 5}
+    provider = run(client, 2, behavior=CapabilityLie(params), params=params)
+    assert client.accepts == ["lease-1"]
+    assert client.reports == [("lease-1", "FAILURE", "CAPABILITY_MISMATCH")]
+    accepted = next(e for e in provider.events if e["event"] == "accepted")
+    assert accepted["planned_outcome"] == "FAILURE"
+    # Free again for the next offer
+    assert provider.lease_id is None
