@@ -142,3 +142,23 @@ def test_heartbeat_sends_provider_time_only_when_given():
     run_with_transport(handler, test)
 
     assert sent == [b"{}", b'{"provider_time":"2026-10-04T12:00:00+00:00"}']
+
+
+def test_get_lease_offers_flattens_the_coordinator_shape():
+    requirements = {
+        "required_vram_mb": 8192,
+        "gpu_models": [],
+        "required_runtime": "cuda12",
+        "tier": "tier1",
+    }
+
+    def handler(request):
+        assert request.url.path == "/providers/provider-a/lease-offers"
+        lease = {"lease_id": "lease-1", "job_id": "job-1", "provider_id": "provider-a"}
+        return httpx.Response(
+            200, json={"offers": [{"lease": lease, "requirements": requirements}]}
+        )
+
+    offers = run_with_transport(handler, lambda client: client.get_lease_offers("provider-a"))
+
+    assert offers == [{"lease_id": "lease-1", "job_id": "job-1", "requirements": requirements}]
