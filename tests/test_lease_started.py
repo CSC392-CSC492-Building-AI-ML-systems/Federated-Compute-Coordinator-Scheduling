@@ -169,7 +169,7 @@ def test_service_deadline_moment_already_counts_as_expired(received_at, expected
             lease_service.InvalidLeaseState,
         ),
         ({"received_at": EXPIRES_AT}, lease_service.LeaseExpired),
-        # Past its drain deadline: finish_drains does not reclaim the lease yet.
+        # Should never happen, because the monitor takes the lease back first. We still refuse.
         ({"stored_provider": provider(ProviderStatus.DRAINED)}, lease_service.ProviderNotActive),
         ({"stored_provider": provider(ProviderStatus.STALE)}, lease_service.ProviderNotActive),
         ({"stored_job": job(current_lease_id="l2")}, lease_service.LeaseNotCurrent),

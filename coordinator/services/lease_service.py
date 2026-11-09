@@ -216,7 +216,7 @@ async def mark_lease_started(
             raise LeaseExpired(lease_id, lease.expires_at)
 
         # Case 5: DRAINING is allowed, because a drain only stops new offers.
-        # DRAINED can still get here: finish_drains does not take leases back yet (TODO).
+        # STALE or DRAINED should never happen. The monitor takes their leases back first.
         provider = store.providers[lease.provider_id]
         if provider.status not in (ProviderStatus.ACTIVE, ProviderStatus.DRAINING):
             raise ProviderNotActive(provider.provider_id, provider.status.value)
