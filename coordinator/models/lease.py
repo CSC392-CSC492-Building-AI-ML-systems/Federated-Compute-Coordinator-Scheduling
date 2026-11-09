@@ -125,3 +125,23 @@ class RejectResponse(BaseModel):
     lease_id: str
     lease_status: LeaseStatus
     job_status: JobStatus
+
+
+class AcceptResponse(BaseModel):
+    """Response of POST /leases/{lease_id}/accept. Shape from the contract (§6)."""
+
+    lease_id: str
+    lease_status: LeaseStatus
+    expires_at: datetime
+    job_id: str
+    job_status: JobStatus
+    attempt_count: int
+
+
+class StartedResponse(BaseModel):
+    """Response of POST /leases/{lease_id}/started. Shape from the contract (§6)."""
+
+    lease_id: str
+    lease_status: LeaseStatus
+    job_id: str
+    job_status: JobStatus
