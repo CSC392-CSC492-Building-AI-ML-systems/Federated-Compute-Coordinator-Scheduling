@@ -76,6 +76,7 @@ async def run_scenario(config_path):
             while prov.events:
                 event = prov.events.pop(0)
                 print(f"[{event['provider']}] {event['event']}")
+        await asyncio.sleep(1)
 
     # clean client
     await client.close()

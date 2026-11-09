@@ -4,16 +4,14 @@ Behaviors: normal, disappear, clock_skew, reject_lease, capability_lie,
 drain_mid_job, upload_fail, disk_full.
 """
 
-from harness.behaviors.base import ACCEPT, Behavior, JobPlan, OfferDecision
+from harness.behaviors.base import ACCEPT, Behavior, JobPlan, OfferDecision, job_requirements
+from harness.behaviors.lease import CapabilityLie, RejectLease
+from harness.behaviors.liveness import ClockSkew, Disappear
 
-BEHAVIORS = {cls.name: cls for cls in (Behavior,)}
+BEHAVIORS = {cls.name: cls for cls in (Behavior, ClockSkew, Disappear, RejectLease, CapabilityLie)}
 
 PLANNED = frozenset(
     {
-        "disappear",
-        "clock_skew",
-        "reject_lease",
-        "capability_lie",
         "drain_mid_job",
         "upload_fail",
         "disk_full",
@@ -30,4 +28,16 @@ def make_behavior(name, params=None):
     raise ValueError(f"unknown behavior {name!r}; known: {sorted(BEHAVIORS)}")
 
 
-__all__ = ["ACCEPT", "BEHAVIORS", "Behavior", "JobPlan", "OfferDecision", "make_behavior"]
+__all__ = [
+    "ACCEPT",
+    "BEHAVIORS",
+    "Behavior",
+    "CapabilityLie",
+    "ClockSkew",
+    "Disappear",
+    "JobPlan",
+    "OfferDecision",
+    "RejectLease",
+    "job_requirements",
+    "make_behavior",
+]

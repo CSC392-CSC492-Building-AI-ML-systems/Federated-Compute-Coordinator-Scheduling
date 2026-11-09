@@ -1,7 +1,6 @@
 """Monitor skeleton: tick order, loop resilience, and lifespan start/stop.
 
-The individual checks (expire_heartbeats, finish_drains) get their own tests when
-they are implemented; here they are replaced by fakes.
+The individual checks have their own service tests; here they are replaced by fakes.
 """
 
 import asyncio
@@ -13,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from coordinator import monitor
 from coordinator.app import create_app
-from coordinator.services import provider_service
+from coordinator.services import lease_service, provider_service
 from coordinator.settings import DEFAULT_CONFIG_PATH, load_settings
 
 NOW = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
@@ -29,22 +28,35 @@ SETTINGS = load_settings().model_copy(
 )
 
 
-def test_tick_runs_heartbeat_check_then_drain_check(monkeypatch):
+def test_tick_runs_provider_checks_before_lease_timeouts(monkeypatch):
     calls = []
 
-    async def fake_expire(store, now, timeout_seconds):
-        calls.append(("expire_heartbeats", now, timeout_seconds))
+    async def fake_expire(store, now, timeout_seconds, max_attempts):
+        calls.append(("expire_heartbeats", now, timeout_seconds, max_attempts))
 
-    async def fake_finish(store, now):
-        calls.append(("finish_drains", now))
+    async def fake_finish(store, now, max_attempts):
+        calls.append(("finish_drains", now, max_attempts))
+
+    async def fake_offers(store, now, max_attempts, offer_timeouts_before_exclude):
+        calls.append(("expire_offers", now, max_attempts, offer_timeouts_before_exclude))
+
+    async def fake_execution(store, now, max_attempts):
+        calls.append(("expire_execution_leases", now, max_attempts))
 
     monkeypatch.setattr(provider_service, "expire_heartbeats", fake_expire)
     monkeypatch.setattr(provider_service, "finish_drains", fake_finish)
+    monkeypatch.setattr(lease_service, "expire_offers", fake_offers)
+    monkeypatch.setattr(lease_service, "expire_execution_leases", fake_execution)
 
     asyncio.run(monitor.run_monitor_tick(store=object(), now=NOW, settings=SETTINGS))
 
     # Order matters: Providers that lost contact are handled before normal drain ends.
-    assert calls == [("expire_heartbeats", NOW, 15.0), ("finish_drains", NOW)]
+    assert calls == [
+        ("expire_heartbeats", NOW, 15.0, SETTINGS.max_attempts),
+        ("finish_drains", NOW, SETTINGS.max_attempts),
+        ("expire_offers", NOW, SETTINGS.max_attempts, SETTINGS.offer_timeouts_before_exclude),
+        ("expire_execution_leases", NOW, SETTINGS.max_attempts),
+    ]
 
 
 def test_loop_keeps_running_after_a_failed_tick(monkeypatch):

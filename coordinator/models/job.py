@@ -47,6 +47,8 @@ class Job(BaseModel):
     # Provider right away. A set because order does not matter and duplicates are
     # meaningless. This is not a global Provider blacklist.
     rejected_provider_ids: set[str] = Field(default_factory=set)
+    # Count unanswered offers separately for each Provider, without using an attempt.
+    offer_timeout_counts: dict[str, int] = Field(default_factory=dict)
     created_at: datetime
     # Kept on the Job so a FAILED Job explains itself without looking up old Leases.
     last_failure_reason: Optional[str] = None

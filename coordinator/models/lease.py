@@ -119,6 +119,14 @@ class ProviderLeaseOffersResponse(BaseModel):
     offers: list[LeaseOfferItem]
 
 
+class RejectResponse(BaseModel):
+    """Body of the 200 response to POST /leases/{lease_id}/reject (contract section 6)."""
+
+    lease_id: str
+    lease_status: LeaseStatus
+    job_status: JobStatus
+
+
 class AcceptResponse(BaseModel):
     """Response of POST /leases/{lease_id}/accept. Shape from the contract (§6)."""
 

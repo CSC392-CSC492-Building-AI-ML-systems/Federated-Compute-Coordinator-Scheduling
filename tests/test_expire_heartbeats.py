@@ -58,7 +58,7 @@ def test_timeout_revokes_and_requeues_without_changing_attempts(store, provider_
     lease.status = LeaseStatus.OFFERED if job_status == JobStatus.QUEUED else LeaseStatus.ACTIVE
     attempts = job.attempt_count
 
-    asyncio.run(expire_heartbeats(store, NOW, 15))
+    asyncio.run(expire_heartbeats(store, NOW, 15, max_attempts=3))
 
     expected = (
         ProviderStatus.STALE if provider_status == ProviderStatus.ACTIVE else ProviderStatus.DRAINED
@@ -75,7 +75,7 @@ def test_timeout_revokes_and_requeues_without_changing_attempts(store, provider_
 
     # Another tick must not change terminal records or count another attempt.
     before = job.model_dump(), lease.model_dump()
-    asyncio.run(expire_heartbeats(store, NOW, 15))
+    asyncio.run(expire_heartbeats(store, NOW, 15, max_attempts=3))
     assert (job.model_dump(), lease.model_dump()) == before
 
 
@@ -85,7 +85,7 @@ def test_fresh_heartbeat_including_boundary_is_unchanged(store, age, provider_st
     store.providers["p"].status = provider_status
     store.providers["p"].last_heartbeat_at = NOW - timedelta(seconds=age)
     before = store.providers["p"].model_dump(), store.leases["l"].model_dump()
-    asyncio.run(expire_heartbeats(store, NOW, 15))
+    asyncio.run(expire_heartbeats(store, NOW, 15, max_attempts=3))
     assert (store.providers["p"].model_dump(), store.leases["l"].model_dump()) == before
     assert store.jobs["j"].current_lease_id == "l"
 
@@ -94,7 +94,7 @@ def test_fresh_heartbeat_including_boundary_is_unchanged(store, age, provider_st
 def test_terminal_lease_is_preserved(store, lease_status):
     store.leases["l"].status = lease_status
     before = store.leases["l"].model_dump(), store.jobs["j"].model_dump()
-    asyncio.run(expire_heartbeats(store, NOW, 15))
+    asyncio.run(expire_heartbeats(store, NOW, 15, max_attempts=3))
     assert (store.leases["l"].model_dump(), store.jobs["j"].model_dump()) == before
 
 
@@ -102,7 +102,7 @@ def test_old_lease_does_not_change_job_with_new_current_lease(store):
     store.jobs["j"].current_lease_id = "new-lease"
     store.jobs["j"].status = JobStatus.RUNNING
     before = store.jobs["j"].model_dump()
-    asyncio.run(expire_heartbeats(store, NOW, 15))
+    asyncio.run(expire_heartbeats(store, NOW, 15, max_attempts=3))
     assert store.leases["l"].status == LeaseStatus.REVOKED
     assert store.jobs["j"].model_dump() == before
 
@@ -110,7 +110,7 @@ def test_old_lease_does_not_change_job_with_new_current_lease(store):
 def test_other_provider_lease_is_preserved(store):
     store.leases["l"].provider_id = "other-provider"
     before = store.leases["l"].model_dump(), store.jobs["j"].model_dump()
-    asyncio.run(expire_heartbeats(store, NOW, 15))
+    asyncio.run(expire_heartbeats(store, NOW, 15, max_attempts=3))
     assert (store.leases["l"].model_dump(), store.jobs["j"].model_dump()) == before
 
 
@@ -147,7 +147,7 @@ def test_multiple_expired_providers_leave_fresh_provider_work_untouched(store):
         )
 
     before = store.jobs["j3"].model_dump(), store.leases["l3"].model_dump()
-    asyncio.run(expire_heartbeats(store, NOW, 15))
+    asyncio.run(expire_heartbeats(store, NOW, 15, max_attempts=3))
 
     assert store.providers["p"].status == ProviderStatus.STALE
     assert store.providers["p2"].status == ProviderStatus.DRAINED
@@ -166,7 +166,7 @@ def test_inactive_provider_is_unchanged(store, provider_status):
         record.model_dump() for record in (store.providers["p"], store.jobs["j"], store.leases["l"])
     )
 
-    asyncio.run(expire_heartbeats(store, NOW, 15))
+    asyncio.run(expire_heartbeats(store, NOW, 15, max_attempts=3))
 
     assert (
         tuple(
@@ -183,7 +183,7 @@ def test_timeout_without_leases_still_updates_provider(store, provider_status):
     store.jobs.clear()
     store.leases.clear()
 
-    asyncio.run(expire_heartbeats(store, NOW, 15))
+    asyncio.run(expire_heartbeats(store, NOW, 15, max_attempts=3))
 
     expected = (
         ProviderStatus.STALE if provider_status == ProviderStatus.ACTIVE else ProviderStatus.DRAINED
@@ -198,6 +198,7 @@ def test_monitor_tick_reclaims_stale_work_before_drain_check(store, provider_sta
     store.jobs["j"].status = JobStatus.RUNNING
     store.jobs["j"].attempt_count = 1
     store.leases["l"].status = LeaseStatus.ACTIVE
+    store.leases["l"].expires_at = NOW
 
     # Repo config with only the value this test depends on overridden, so adding a
     # new setting does not break it.
@@ -215,7 +216,7 @@ def test_monitor_tick_reclaims_stale_work_before_drain_check(store, provider_sta
 def test_expiration_waits_for_store_lock(store):
     async def scenario():
         async with store.lock:
-            task = asyncio.create_task(expire_heartbeats(store, NOW, 15))
+            task = asyncio.create_task(expire_heartbeats(store, NOW, 15, max_attempts=3))
             await asyncio.sleep(0)
             assert not task.done()
             assert store.providers["p"].status == ProviderStatus.ACTIVE
@@ -227,3 +228,21 @@ def test_expiration_waits_for_store_lock(store):
         assert store.jobs["j"].current_lease_id is None
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("job_status", [JobStatus.STARTING, JobStatus.RUNNING])
+@pytest.mark.parametrize("provider_status", [ProviderStatus.ACTIVE, ProviderStatus.DRAINING])
+def test_monitor_fails_exhausted_attempts(store, job_status, provider_status):
+    settings = load_settings().model_copy(update={"max_attempts": 2})
+    store.providers["p"].status = provider_status
+    store.jobs["j"].status = job_status
+    store.jobs["j"].attempt_count = settings.max_attempts
+    store.leases["l"].status = LeaseStatus.ACTIVE
+
+    asyncio.run(run_monitor_tick(store, NOW, settings))
+
+    assert store.leases["l"].reason == "PROVIDER_STALE"
+    assert store.jobs["j"].status == JobStatus.FAILED
+    assert store.jobs["j"].attempt_count == 2
+    assert store.jobs["j"].current_lease_id is None
+    assert store.jobs["j"].last_failure_reason == "PROVIDER_STALE"

@@ -217,3 +217,125 @@ def test_e2e_register_then_drain_twice(client):
     assert first.json() == expected
     assert second.status_code == 200
     assert second.json() == expected  # the longer grace period did not move the deadline
+
+
+# --- Monitor: finish draining and reclaim unfinished work --------------------
+
+
+@pytest.mark.parametrize("offset, reclaimed", [(-0.001, False), (0, True), (0.001, True)])
+@pytest.mark.parametrize(
+    "lease_status, job_status, attempts, expected",
+    [
+        (LeaseStatus.OFFERED, JobStatus.QUEUED, 0, JobStatus.QUEUED),
+        (LeaseStatus.ACTIVE, JobStatus.STARTING, 1, JobStatus.QUEUED),
+        (LeaseStatus.ACTIVE, JobStatus.RUNNING, 1, JobStatus.QUEUED),
+        (LeaseStatus.ACTIVE, JobStatus.RUNNING, 2, JobStatus.FAILED),
+    ],
+)
+def test_finish_drains_reclaims_at_deadline(
+    offset, reclaimed, lease_status, job_status, attempts, expected
+):
+    async def scenario():
+        store = Store()
+        store.providers["p1"] = provider(ProviderStatus.DRAINING, drain_deadline=NOW)
+        store.jobs["j1"] = job("j1", job_status, "l1")
+        store.jobs["j1"].attempt_count = attempts
+        store.leases["l1"] = lease("l1", "j1", lease_status)
+        await provider_service.finish_drains(store, NOW + timedelta(seconds=offset), max_attempts=2)
+        return store
+
+    store = asyncio.run(scenario())
+    assert store.providers["p1"].status == (
+        ProviderStatus.DRAINED if reclaimed else ProviderStatus.DRAINING
+    )
+    closed, stored_job = store.leases["l1"], store.jobs["j1"]
+    assert closed.status == (LeaseStatus.REVOKED if reclaimed else lease_status)
+    assert closed.reason == ("DRAIN_RECLAIM" if reclaimed else None)
+    assert stored_job.status == (expected if reclaimed else job_status)
+    assert stored_job.current_lease_id == (None if reclaimed else "l1")
+    assert stored_job.attempt_count == attempts
+    accepted_failure = reclaimed and lease_status == LeaseStatus.ACTIVE
+    assert stored_job.last_failure_reason == ("DRAIN_RECLAIM" if accepted_failure else None)
+
+
+@pytest.mark.parametrize("deadline", [None, NOW + timedelta(seconds=60)])
+def test_finish_drains_without_live_work_does_not_wait_for_deadline(deadline):
+    async def scenario():
+        store = Store()
+        store.providers["p1"] = provider(ProviderStatus.DRAINING, deadline)
+        await provider_service.finish_drains(store, NOW, max_attempts=2)
+        assert store.providers["p1"].status == ProviderStatus.DRAINED
+
+    asyncio.run(scenario())
+
+
+def test_finish_drains_preserves_work_when_deadline_is_missing():
+    async def scenario():
+        store = Store()
+        store.providers["p1"] = provider(ProviderStatus.DRAINING)
+        store.jobs["j1"] = job("j1", JobStatus.RUNNING, "l1")
+        store.leases["l1"] = lease("l1", "j1", LeaseStatus.ACTIVE)
+        await provider_service.finish_drains(store, NOW, max_attempts=2)
+        assert store.providers["p1"].status == ProviderStatus.DRAINING
+        assert store.leases["l1"].status == LeaseStatus.ACTIVE
+        assert store.jobs["j1"].current_lease_id == "l1"
+
+    asyncio.run(scenario())
+
+
+def test_drain_reclaim_preserves_old_jobs_terminal_leases_and_other_providers():
+    async def scenario():
+        store = Store()
+        store.providers["p1"] = provider(ProviderStatus.DRAINING, NOW)
+        store.providers["p2"] = provider(ProviderStatus.ACTIVE).model_copy(
+            update={"provider_id": "p2"}
+        )
+        for lease_id, status in [
+            ("old", LeaseStatus.ACTIVE),
+            ("terminal", LeaseStatus.RELEASED),
+            ("other", LeaseStatus.ACTIVE),
+            ("offered", LeaseStatus.OFFERED),
+        ]:
+            store.jobs[lease_id] = job(lease_id, JobStatus.RUNNING, lease_id)
+            store.leases[lease_id] = lease(lease_id, lease_id, status)
+        store.jobs["old"].current_lease_id = "new-lease"
+        store.jobs["offered"].status = JobStatus.QUEUED
+        store.leases["other"].provider_id = "p2"
+        old_job = store.jobs["old"].model_dump()
+        unchanged = [store.leases["terminal"], store.leases["other"], store.jobs["other"]]
+        before = [record.model_dump() for record in unchanged]
+
+        await provider_service.finish_drains(store, NOW, max_attempts=2)
+
+        assert store.providers["p1"].status == ProviderStatus.DRAINED
+        assert store.providers["p2"].status == ProviderStatus.ACTIVE
+        assert store.leases["old"].status == LeaseStatus.REVOKED
+        assert store.jobs["old"].model_dump() == old_job
+        assert store.leases["offered"].status == LeaseStatus.REVOKED
+        assert store.jobs["offered"].current_lease_id is None
+        assert [record.model_dump() for record in unchanged] == before
+
+        after = [record.model_dump() for record in store.leases.values()]
+        await provider_service.finish_drains(store, NOW, max_attempts=2)
+        assert [record.model_dump() for record in store.leases.values()] == after
+
+    asyncio.run(scenario())
+
+
+def test_drain_reclaim_waits_for_store_lock():
+    async def scenario():
+        store = Store()
+        store.providers["p1"] = provider(ProviderStatus.DRAINING, NOW)
+        store.jobs["j1"] = job("j1", JobStatus.RUNNING, "l1")
+        store.leases["l1"] = lease("l1", "j1", LeaseStatus.ACTIVE)
+        async with store.lock:
+            task = asyncio.create_task(provider_service.finish_drains(store, NOW, max_attempts=2))
+            await asyncio.sleep(0)
+            assert not task.done()
+            assert store.leases["l1"].status == LeaseStatus.ACTIVE
+            assert store.providers["p1"].status == ProviderStatus.DRAINING
+        await asyncio.wait_for(task, timeout=1)
+        assert store.leases["l1"].status == LeaseStatus.REVOKED
+        assert store.providers["p1"].status == ProviderStatus.DRAINED
+
+    asyncio.run(scenario())

@@ -17,6 +17,12 @@ class OfferDecision:
 ACCEPT = OfferDecision(True)
 
 
+def job_requirements(offer):
+    """The offered job's requirements (required_vram_mb, gpu_models,
+    required_runtime, tier), as sent by the coordinator with each offer."""
+    return offer["requirements"]
+
+
 class JobPlan:
     """What an accepted fake job will do, decided when it is accepted."""
 

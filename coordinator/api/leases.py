@@ -11,6 +11,8 @@ from coordinator.models.lease import (
     Lease,
     LeaseActionRequest,
     ProviderLeaseOffersResponse,
+    RejectRequest,
+    RejectResponse,
     StartedResponse,
 )
 from coordinator.services.lease_service import (
@@ -27,14 +29,12 @@ from coordinator.services.lease_service import (
     get_lease,
     get_provider_lease_offers,
     mark_lease_started,
+    reject_lease,
 )
 from coordinator.settings import Settings
 from coordinator.store import Store
 
 router = APIRouter()
-
-# TODO: Define endpoints and request/response models.
-# Keep state changes in services, not in route handlers.
 
 
 @router.get(
@@ -48,6 +48,27 @@ async def get_lease_offers(provider_id: str, store: Store = Depends(get_store)):
         return await get_provider_lease_offers(store, provider_id)
     except ProviderNotFound as exc:
         raise ApiError(404, "PROVIDER_NOT_FOUND", str(exc)) from exc
+
+
+@router.post(
+    "/leases/{lease_id}/reject",
+    status_code=200,
+    response_model=RejectResponse,
+)
+async def reject_lease_endpoint(
+    lease_id: str,
+    request: RejectRequest,
+    store: Store = Depends(get_store),
+    received_at: datetime = Depends(get_received_at),
+):
+    try:
+        return await reject_lease(store, lease_id, request, now=received_at)
+    except LeaseNotFound as e:
+        raise ApiError(404, "LEASE_NOT_FOUND", str(e)) from e
+    except LeaseProviderMismatch as e:
+        raise ApiError(403, "LEASE_PROVIDER_MISMATCH", str(e)) from e
+    except InvalidLeaseState as e:
+        raise ApiError(409, "INVALID_LEASE_STATE", str(e)) from e
 
 
 @router.get("/leases/{lease_id}", status_code=200, response_model=Lease)
