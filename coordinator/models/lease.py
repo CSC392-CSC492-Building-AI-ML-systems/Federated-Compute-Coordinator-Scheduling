@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from coordinator.models.job import JobStatus
 
@@ -78,6 +78,13 @@ class ReportRequest(LeaseActionRequest):
 
     reason: Optional[FailureReason] = None
 
+    @model_validator(mode="after")
+    def _success_has_no_reason(self) -> "ReportRequest":
+        # A reason explains a failure. A success that comes with one contradicts itself.
+        if self.outcome == LeaseOutcome.SUCCESS and self.reason is not None:
+            raise ValueError("a SUCCESS report must not have a reason")
+        return self
+
 
 class Lease(BaseModel):
     """Stored Lease record, owned by the Store."""
@@ -143,5 +150,23 @@ class StartedResponse(BaseModel):
 
     lease_id: str
     lease_status: LeaseStatus
+    job_id: str
+    job_status: JobStatus
+
+
+class RenewResponse(BaseModel):
+    """Response of POST /leases/{lease_id}/renew. Shape from the contract (§6)."""
+
+    lease_id: str
+    lease_status: LeaseStatus
+    expires_at: datetime
+
+
+class ReportResponse(BaseModel):
+    """Response of POST /leases/{lease_id}/report. Shape from the contract (§6)."""
+
+    lease_id: str
+    lease_status: LeaseStatus
+    outcome: LeaseOutcome
     job_id: str
     job_status: JobStatus
