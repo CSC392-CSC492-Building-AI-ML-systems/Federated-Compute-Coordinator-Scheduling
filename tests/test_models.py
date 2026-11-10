@@ -281,6 +281,12 @@ def test_report_failure_accepts_contract_reason():
     assert report.model_dump(mode="json")["reason"] == "DISK_FULL"
 
 
+def test_report_success_rejects_a_reason():
+    # A reason explains a failure. A success that comes with one contradicts itself.
+    with pytest.raises(ValidationError):
+        ReportRequest(provider_id="p", outcome="SUCCESS", reason="DISK_FULL")
+
+
 @pytest.mark.parametrize("reason", ["DRAIN_RECLAIM", "OFFER_TIMEOUT", "made_up"])
 def test_report_rejects_internal_or_unknown_reasons(reason):
     # Internal reasons are recorded by the Coordinator, never claimed by a Provider.
