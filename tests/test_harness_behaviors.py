@@ -9,9 +9,12 @@ from harness.behaviors import (
     CapabilityLie,
     ClockSkew,
     Disappear,
+    DiskFull,
+    DrainMidJob,
     JobPlan,
     OfferDecision,
     RejectLease,
+    UploadFail,
     make_behavior,
 )
 from harness.provider import FakeProvider
@@ -39,6 +42,7 @@ class RecordingClient:
         self.rejects = []
         self.reports = []
         self.provider_times = []
+        self.drains = []
 
     async def register_provider(self, data):
         return {"status": "ACTIVE"}
@@ -47,9 +51,14 @@ class RecordingClient:
         self.provider_times.append(provider_time)
         return {"status": "ACTIVE"}
 
+    async def drain(self, provider_id, grace_period_seconds):
+        self.drains.append((provider_id, grace_period_seconds))
+        return {"status": "DRAINING"}
+
     async def get_lease_offers(self, provider_id):
-        offers, self.offers = self.offers, []
-        return offers
+        if self.offers:
+            return [self.offers.pop(0)]
+        return []
 
     async def accept(self, lease_id, provider_id):
         self.accepts.append(lease_id)
@@ -93,11 +102,6 @@ def test_make_behavior_builds_normal_with_params():
     behavior = make_behavior("normal", {"duration_sec": 5})
     assert type(behavior) is Behavior
     assert behavior.params == {"duration_sec": 5}
-
-
-def test_planned_behavior_is_not_implemented_yet():
-    with pytest.raises(NotImplementedError, match="disk_full"):
-        make_behavior("disk_full", {})
 
 
 def test_unknown_behavior_fails_fast():
@@ -206,6 +210,70 @@ def test_clock_skew_sends_skewed_time_and_runs_normally():
     assert client.provider_times[0] == (T0 + timedelta(seconds=3601)).isoformat()
     assert len(client.provider_times) == 6
     assert client.reports == [("lease-1", "SUCCESS", None)]
+
+
+# execution
+
+
+def test_make_behavior_builds_execution_behaviors():
+    b_upload = make_behavior("upload_fail", {"fail_times": 2})
+    assert type(b_upload) is UploadFail
+    assert b_upload.fail_times == 2
+
+    b_disk = make_behavior("disk_full", {"fail_after_sec": 3})
+    assert type(b_disk) is DiskFull
+    assert b_disk.fail_after_sec == 3
+
+    b_drain = make_behavior("drain_mid_job", {"drain_after_sec": 4, "grace_period_seconds": 8})
+    assert type(b_drain) is DrainMidJob
+    assert b_drain.drain_after_sec == 4
+    assert b_drain.grace_period_seconds == 8
+
+
+def test_upload_fail_fails_first_job_then_succeeds():
+    client = RecordingClient()
+    # Give it 2 offers: lease-1 then lease-2
+    client.offers = [
+        {"lease_id": "lease-1", "job_id": "job-1"},
+        {"lease_id": "lease-2", "job_id": "job-2"},
+    ]
+    params = {"fail_times": 1, "duration_sec": 2}
+    # Run for 6 seconds:
+    # t=1 accept lease-1, t=3 finish lease-1 (FAILURE)
+    # t=4 accept lease-2, t=6 finish lease-2 (SUCCESS)
+    run(client, 6, behavior=UploadFail(params), params=params)
+
+    assert client.reports == [
+        ("lease-1", "FAILURE", "ARTIFACT_UPLOAD_FAILED"),
+        ("lease-2", "SUCCESS", None),
+    ]
+
+
+def test_disk_full_fails_early_then_succeeds():
+    client = RecordingClient()
+    client.offers = [
+        {"lease_id": "lease-1", "job_id": "job-1"},
+        {"lease_id": "lease-2", "job_id": "job-2"},
+    ]
+    # fail_after_sec: 2 (even though duration_sec is 5)
+    params = {"fail_times": 1, "fail_after_sec": 2, "duration_sec": 5}
+    # t=1 accept lease-1, finishes early at t=3 (after 2s run_sec)
+    run(client, 3, behavior=DiskFull(params), params=params)
+
+    assert client.reports == [("lease-1", "FAILURE", "DISK_FULL")]
+
+
+def test_drain_mid_job_triggers_drain_at_specified_time():
+    client = RecordingClient()
+    params = {"drain_after_sec": 2, "grace_period_seconds": 6, "duration_sec": 5}
+    # Run for 3 seconds:
+    # t=1: accepts job (job_started_at = T0 + 1s)
+    # t=3: (now - job_started_at) is 2s >= drain_after_sec -> triggers drain
+    provider = run(client, 3, behavior=DrainMidJob(params), params=params)
+
+    assert client.drains == [("p1", 6)]
+    assert provider.status == "DRAINING"
+    assert "drain_started" in event_names(provider)
 
 
 # reject_lease
