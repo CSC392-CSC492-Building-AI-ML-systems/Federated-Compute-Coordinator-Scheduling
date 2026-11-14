@@ -25,6 +25,12 @@ offer_timeout_seconds: 5
 # Rule: Harness renew interval (3 s) <= this / 3.
 lease_duration_seconds: 10
 
+# After a renew, a Lease ends at most this long after the renew arrived.
+# This also stops a Provider from piling up time by renewing over and over.
+# Placeholder (24 h), not from the timing table yet. Adjust once real job lengths are known.
+# Rule: lease_duration_seconds <= this.
+max_lease_remaining_seconds: 86400
+
 # How many times a Job may be started before it is marked FAILED.
 max_attempts: 3
 

@@ -22,6 +22,7 @@ class Settings(BaseModel):
     # Lease deadlines and retry limits from the team's timing parameter table.
     offer_timeout_seconds: float = Field(gt=0)
     lease_duration_seconds: float = Field(gt=0)
+    max_lease_remaining_seconds: float = Field(gt=0)
     max_attempts: int = Field(ge=1)
     offer_timeouts_before_exclude: int = Field(ge=1)
     queue_timeout_seconds: float = Field(gt=0)

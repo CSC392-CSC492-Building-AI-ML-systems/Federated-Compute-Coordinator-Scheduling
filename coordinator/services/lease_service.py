@@ -7,6 +7,7 @@ from typing import Optional
 from coordinator.models.job import JobStatus
 from coordinator.models.lease import (
     AcceptResponse,
+    FailureReason,
     InternalReason,
     JobRequirements,
     Lease,
@@ -17,6 +18,10 @@ from coordinator.models.lease import (
     ProviderLeaseOffersResponse,
     RejectRequest,
     RejectResponse,
+    RenewRequest,
+    RenewResponse,
+    ReportRequest,
+    ReportResponse,
     StartedResponse,
 )
 from coordinator.models.provider import ProviderStatus
@@ -114,12 +119,23 @@ class InvalidJobState(Exception):
         self.expected_status = expected_status
 
 
+class DrainDeadlinePassed(Exception):
+    """The draining Provider's time is up; routes translate this to HTTP 409."""
+
+    def __init__(self, provider_id: str, drain_deadline: datetime):
+        super().__init__(
+            f"provider_id {provider_id!r} had to finish by {drain_deadline.isoformat()}"
+        )
+        self.provider_id = provider_id
+        self.drain_deadline = drain_deadline
+
+
 def _find_owned_lease(
     store: Store, lease_id: str, provider_id: str, expected_status: LeaseStatus
 ) -> Lease:
     """
     Find the lease, and check it belongs to this Provider and has the right status.
-    Caller holds store.lock. Used by accept and started, later by renew and report.
+    Caller holds store.lock. Used by accept, started, renew and report.
     """
     # 1, no such lease -> refuse
     # 2, the lease belongs to a different Provider -> refuse
@@ -242,9 +258,159 @@ async def mark_lease_started(
         )
 
 
-async def report_lease(lease_id, report):
-    """Handle a result and related state changes."""
-    raise NotImplementedError("Team implementation pending")
+async def renew_lease(
+    store: Store,
+    lease_id: str,
+    request: RenewRequest,
+    received_at: datetime,
+    max_lease_remaining_seconds: float,
+) -> RenewResponse:
+    """
+    A Provider asks for more time to finish its Job. Heartbeats never do this.
+    """
+    # Check everything first, then change. If any check fails, nothing is changed.
+    # 1, no such lease -> refuse
+    # 2, the lease belongs to a different Provider -> refuse
+    # 3, the lease is not ACTIVE, for example it already ended -> refuse
+    # 4, the lease ran out of time -> refuse
+    # 5, the Provider is STALE or DRAINED -> refuse
+    # 6, the Job is not on this lease any more -> refuse
+    # 7, the Job has not sent started yet -> refuse
+    # 8, the Provider is draining and its drain time is up -> refuse
+    # 9, all good -> push expires_at later, within the limits
+    async with store.lock:
+        # Cases 1-3
+        lease = _find_owned_lease(store, lease_id, request.provider_id, LeaseStatus.ACTIVE)
+
+        # Case 4: a renew must arrive before the lease ends. Same rule as started.
+        if received_at >= lease.expires_at:
+            raise LeaseExpired(lease_id, lease.expires_at)
+
+        # Case 5: DRAINING is allowed, because a draining Provider is finishing its work.
+        # STALE or DRAINED should never happen. The monitor takes their leases back first.
+        provider = store.providers[lease.provider_id]
+        if provider.status not in (ProviderStatus.ACTIVE, ProviderStatus.DRAINING):
+            raise ProviderNotActive(provider.provider_id, provider.status.value)
+
+        job = store.jobs[lease.job_id]
+        # Case 6: should never happen. We keep it in case of a bug elsewhere.
+        if job.current_lease_id != lease_id:
+            raise LeaseNotCurrent(lease_id, job.job_id)
+
+        # Case 7: without started, we cannot be sure the Job really runs.
+        # So it gets no extra time. The lease times out and the Job runs again.
+        if job.status != JobStatus.RUNNING:
+            raise InvalidJobState(job.job_id, job.status.value, JobStatus.RUNNING.value)
+
+        # Case 8: at the drain deadline itself, the drain time is already up.
+        # The monitor will take the lease back.
+        # The drain deadline only counts while the Provider is draining.
+        drain_deadline = None
+        if provider.status == ProviderStatus.DRAINING:
+            drain_deadline = provider.drain_deadline
+        if drain_deadline is not None and received_at >= drain_deadline:
+            raise DrainDeadlinePassed(provider.provider_id, drain_deadline)
+
+        # Case 9: add the time to the old deadline, not to now.
+        # Why: the Harness renews 3 s every 3 s, so its lease stays the same distance ahead.
+        new_expires_at = lease.expires_at + timedelta(seconds=request.extend_seconds)
+
+        # Limit 1: the lease ends at most max_lease_remaining_seconds after now.
+        # Why: renewing over and over must not pile up time without end.
+        latest_allowed = received_at + timedelta(seconds=max_lease_remaining_seconds)
+        new_expires_at = min(new_expires_at, latest_allowed)
+
+        # Limit 2: a draining Provider must finish by its drain deadline.
+        # This can move expires_at earlier. The contract wants that.
+        if drain_deadline is not None:
+            new_expires_at = min(new_expires_at, drain_deadline)
+
+        lease.expires_at = new_expires_at
+
+        return RenewResponse(
+            lease_id=lease.lease_id,
+            lease_status=lease.status,
+            expires_at=lease.expires_at,
+        )
+
+
+async def report_lease(
+    store: Store,
+    lease_id: str,
+    request: ReportRequest,
+    received_at: datetime,
+    max_attempts: int,
+) -> ReportResponse:
+    """
+    A Provider says how its Job ended. This is the normal way a lease ends.
+    """
+    # Check everything first, then change. If any check fails, nothing is changed.
+    # 1, no such lease -> refuse
+    # 2, the lease belongs to a different Provider -> refuse
+    # 3, the lease is not ACTIVE, for example it already ended -> refuse
+    # 4, the lease ran out of time -> refuse
+    # 5, the Provider is STALE or DRAINED -> refuse
+    # 6, the Job is not on this lease any more -> refuse
+    # 7, the Job is not STARTING or RUNNING -> refuse
+    # 8, SUCCESS but the Job never got to RUNNING -> refuse
+    # 9, FAILURE because this Provider cannot run the Job -> stop offering this Job to it
+    # 10, all good -> lease RELEASED, and close_lease decides what the Job does next
+    async with store.lock:
+        # Cases 1-3
+        lease = _find_owned_lease(store, lease_id, request.provider_id, LeaseStatus.ACTIVE)
+
+        # Case 4: same rule as started. A late report is refused, even if the work is done.
+        # Why: otherwise the result would depend on whether the monitor ran first.
+        if received_at >= lease.expires_at:
+            raise LeaseExpired(lease_id, lease.expires_at)
+
+        # Case 5: DRAINING is allowed, because a draining Provider is finishing its work.
+        # STALE or DRAINED should never happen. The monitor takes their leases back first.
+        provider = store.providers[lease.provider_id]
+        if provider.status not in (ProviderStatus.ACTIVE, ProviderStatus.DRAINING):
+            raise ProviderNotActive(provider.provider_id, provider.status.value)
+
+        job = store.jobs[lease.job_id]
+        # Case 6: should never happen. We keep it in case of a bug elsewhere.
+        if job.current_lease_id != lease_id:
+            raise LeaseNotCurrent(lease_id, job.job_id)
+
+        # Case 7: should never happen. While its lease is ACTIVE, a Job is STARTING or RUNNING.
+        if job.status not in (JobStatus.STARTING, JobStatus.RUNNING):
+            raise InvalidJobState(job.job_id, job.status.value, "STARTING or RUNNING")
+
+        # Case 8: started never arrived, so we cannot be sure the Job really ran.
+        # The lease will time out and the Job will run again.
+        # FAILURE is still fine here, because a Job can fail before it sends started.
+        if request.outcome == LeaseOutcome.SUCCESS and job.status == JobStatus.STARTING:
+            raise InvalidJobState(job.job_id, job.status.value, JobStatus.RUNNING.value)
+
+        # Case 9: running the Job again on this Provider would fail the same way.
+        # Only this Job is affected. Other Jobs can still go to this Provider.
+        if request.reason == FailureReason.CAPABILITY_MISMATCH:
+            job.rejected_provider_ids.add(lease.provider_id)
+
+        # Case 10: SUCCESS -> job COMPLETED.
+        # FAILURE -> job QUEUED to run again, or FAILED when no attempts are left.
+        # The lease keeps the reason as plain text, so we pass its name.
+        reason = request.reason.value if request.reason is not None else None
+        close_lease(
+            store,
+            lease_id,
+            LeaseStatus.RELEASED,
+            reason,
+            received_at,
+            max_attempts,
+            request.outcome,
+        )
+
+        return ReportResponse(
+            lease_id=lease.lease_id,
+            lease_status=lease.status,
+            outcome=lease.outcome,
+            job_id=job.job_id,
+            job_status=job.status,
+        )
 
 
 def create_lease(

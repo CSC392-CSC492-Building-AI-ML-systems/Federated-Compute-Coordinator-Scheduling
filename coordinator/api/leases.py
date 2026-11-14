@@ -13,9 +13,14 @@ from coordinator.models.lease import (
     ProviderLeaseOffersResponse,
     RejectRequest,
     RejectResponse,
+    RenewRequest,
+    RenewResponse,
+    ReportRequest,
+    ReportResponse,
     StartedResponse,
 )
 from coordinator.services.lease_service import (
+    DrainDeadlinePassed,
     InvalidJobState,
     InvalidLeaseState,
     LeaseExpired,
@@ -30,6 +35,8 @@ from coordinator.services.lease_service import (
     get_provider_lease_offers,
     mark_lease_started,
     reject_lease,
+    renew_lease,
+    report_lease,
 )
 from coordinator.settings import Settings
 from coordinator.store import Store
@@ -120,6 +127,66 @@ async def mark_lease_started_endpoint(
     """Endpoint for a Provider to confirm that its accepted Job is running."""
     try:
         return await mark_lease_started(store, lease_id, request, received_at)
+    except LeaseNotFound as exc:
+        raise ApiError(404, "LEASE_NOT_FOUND", str(exc)) from exc
+    except LeaseProviderMismatch as exc:
+        # 403 matches the reject route. The team may switch both to 409.
+        raise ApiError(403, "LEASE_PROVIDER_MISMATCH", str(exc)) from exc
+    except InvalidLeaseState as exc:
+        raise ApiError(409, "INVALID_LEASE_STATE", str(exc)) from exc
+    except LeaseExpired as exc:
+        raise ApiError(409, "LEASE_EXPIRED", str(exc)) from exc
+    except ProviderNotActive as exc:
+        raise ApiError(409, "PROVIDER_NOT_ACTIVE", str(exc)) from exc
+    except LeaseNotCurrent as exc:
+        raise ApiError(409, "LEASE_NOT_CURRENT", str(exc)) from exc
+    except InvalidJobState as exc:
+        raise ApiError(409, "INVALID_JOB_STATE", str(exc)) from exc
+
+
+@router.post("/leases/{lease_id}/renew", status_code=200, response_model=RenewResponse)
+async def renew_lease_endpoint(
+    lease_id: str,
+    request: RenewRequest,
+    store: Store = Depends(get_store),
+    received_at: datetime = Depends(get_received_at),
+    settings: Settings = Depends(get_settings),
+):
+    """Endpoint for a Provider to get more time for its running Job."""
+    try:
+        return await renew_lease(
+            store, lease_id, request, received_at, settings.max_lease_remaining_seconds
+        )
+    except LeaseNotFound as exc:
+        raise ApiError(404, "LEASE_NOT_FOUND", str(exc)) from exc
+    except LeaseProviderMismatch as exc:
+        # 403 matches the reject route. The team may switch both to 409.
+        raise ApiError(403, "LEASE_PROVIDER_MISMATCH", str(exc)) from exc
+    except InvalidLeaseState as exc:
+        raise ApiError(409, "INVALID_LEASE_STATE", str(exc)) from exc
+    except LeaseExpired as exc:
+        raise ApiError(409, "LEASE_EXPIRED", str(exc)) from exc
+    except ProviderNotActive as exc:
+        raise ApiError(409, "PROVIDER_NOT_ACTIVE", str(exc)) from exc
+    except LeaseNotCurrent as exc:
+        raise ApiError(409, "LEASE_NOT_CURRENT", str(exc)) from exc
+    except InvalidJobState as exc:
+        raise ApiError(409, "INVALID_JOB_STATE", str(exc)) from exc
+    except DrainDeadlinePassed as exc:
+        raise ApiError(409, "DRAIN_DEADLINE_PASSED", str(exc)) from exc
+
+
+@router.post("/leases/{lease_id}/report", status_code=200, response_model=ReportResponse)
+async def report_lease_endpoint(
+    lease_id: str,
+    request: ReportRequest,
+    store: Store = Depends(get_store),
+    received_at: datetime = Depends(get_received_at),
+    settings: Settings = Depends(get_settings),
+):
+    """Endpoint for a Provider to report how its Job ended."""
+    try:
+        return await report_lease(store, lease_id, request, received_at, settings.max_attempts)
     except LeaseNotFound as exc:
         raise ApiError(404, "LEASE_NOT_FOUND", str(exc)) from exc
     except LeaseProviderMismatch as exc:
