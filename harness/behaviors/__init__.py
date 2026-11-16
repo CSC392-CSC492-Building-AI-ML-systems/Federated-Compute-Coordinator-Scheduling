@@ -4,7 +4,7 @@ Behaviors: normal, disappear, clock_skew, reject_lease, capability_lie,
 drain_mid_job, upload_fail, disk_full.
 """
 
-from harness.behaviors.base import ACCEPT, Behavior, JobPlan, OfferDecision
+from harness.behaviors.base import ACCEPT, Behavior, JobPlan, OfferDecision, job_requirements
 from harness.behaviors.execution import DiskFull, DrainMidJob, UploadFail
 from harness.behaviors.lease import CapabilityLie, RejectLease
 from harness.behaviors.liveness import ClockSkew, Disappear
