@@ -5,6 +5,7 @@ with a full report.
 """
 
 from harness.checks.execution import check_disk_full, check_drain_mid_job, check_upload_fail
+from harness.checks.invariants import check_invariants
 from harness.checks.lease import check_capability_lie, check_reject_lease
 from harness.checks.liveness import check_clock_skew, check_disappear
 
@@ -27,8 +28,8 @@ def run_checks(events, final_state):
     behaviors = sorted(
         {e["behavior"] for e in events if e["event"] == "registered" and e["behavior"] in CHECKS}
     )
-    # TODO: add in the invariant checks (check_invariants in checks/invariants.py)
-    to_run = [(b, CHECKS[b]) for b in behaviors]
+    # runs invariant checks
+    to_run = [("invariants", check_invariants)] + [(b, CHECKS[b]) for b in behaviors]
 
     results = []
     for name, check in to_run:
@@ -36,6 +37,14 @@ def run_checks(events, final_state):
             results.extend(check(events, final_state))
         except NotImplementedError:
             results.append({"check": f"{name} check", "status": "NOT_IMPLEMENTED", "detail": ""})
+        except Exception as error:
+            results.append(
+                {
+                    "check": f"{name} check",
+                    "status": "ERROR",
+                    "detail": f"{type(error).__name__}: {error}",
+                }
+            )
     return results
 
 
