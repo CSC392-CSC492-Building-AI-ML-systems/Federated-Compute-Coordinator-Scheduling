@@ -3,7 +3,8 @@
 import asyncio
 import json
 
-from harness.checks import run_checks
+from harness.checks import CHECKS, run_checks
+from harness.checks.lease import check_capability_lie, check_reject_lease
 from harness.checks.liveness import check_clock_skew, check_disappear
 from harness.runner import collect_final_state, write_report
 
@@ -173,10 +174,15 @@ def test_run_checks_runs_the_check_of_each_behavior_in_the_run():
     assert "disappear provider in run" not in checks
 
 
-def test_run_checks_skips_checks_that_are_not_written_yet():
-    events = [event("p1", "registered", behavior="reject_lease")]
+def test_run_checks_skips_checks_that_are_not_written_yet(monkeypatch):
+    # A stand-in, so the test does not depend on which real checks are still stubs
+    def not_written(events, final_state):
+        raise NotImplementedError
+
+    monkeypatch.setitem(CHECKS, "disk_full", not_written)
+    events = [event("p1", "registered", behavior="disk_full")]
     results = run_checks(events, {})
-    assert {"check": "reject_lease check", "status": "NOT_IMPLEMENTED", "detail": ""} in results
+    assert {"check": "disk_full check", "status": "NOT_IMPLEMENTED", "detail": ""} in results
 
 
 def test_write_report_saves_the_run_next_to_the_scenario(tmp_path):
@@ -196,3 +202,329 @@ def test_write_report_saves_the_run_next_to_the_scenario(tmp_path):
     assert report["results"] == results
     assert report["final_state"] == {"jobs": {}}
     assert report["events"] == events
+
+
+# lease: shared helpers
+
+
+def failed(results):
+    return [r["check"] for r in results if r["status"] == "FAIL"]
+
+
+def inconclusive(results):
+    return [r["check"] for r in results if r["status"] == "INCONCLUSIVE"]
+
+
+# lease: reject_lease
+
+REJECT_EVENTS = [
+    event("node-normal", "registered", behavior="normal"),
+    event("node-rejector", "registered", behavior="reject_lease"),
+    event("node-normal", "accepted", lease_id="lease-1", job_id="job-1", planned_outcome="SUCCESS"),
+    event("node-rejector", "rejected", lease_id="lease-2", job_id="job-2", reason="LOCAL_BUSY"),
+    event("node-normal", "reported", lease_id="lease-1", outcome="SUCCESS", reason=None),
+    event("node-normal", "accepted", lease_id="lease-3", job_id="job-2", planned_outcome="SUCCESS"),
+    event("node-normal", "reported", lease_id="lease-3", outcome="SUCCESS", reason=None),
+]
+
+
+def reject_state(
+    lease_2_status="REJECTED",
+    lease_2_reason="LOCAL_BUSY",
+    excluded=("node-rejector",),
+    job_2_attempts=1,
+    job_2_status="COMPLETED",
+    rejector_status="ACTIVE",
+):
+    return {
+        "providers": {
+            "node-normal": {"status": "ACTIVE"},
+            "node-rejector": {"status": rejector_status},
+        },
+        "jobs": {
+            "job-1": {"status": "COMPLETED", "attempt_count": 1, "rejected_provider_ids": []},
+            "job-2": {
+                "status": job_2_status,
+                "attempt_count": job_2_attempts,
+                "rejected_provider_ids": list(excluded),
+            },
+        },
+        "leases": {
+            "lease-1": {"job_id": "job-1", "status": "RELEASED", "outcome": "SUCCESS"},
+            "lease-2": {
+                "job_id": "job-2",
+                "status": lease_2_status,
+                "reason": lease_2_reason,
+                "outcome": None,
+            },
+            "lease-3": {"job_id": "job-2", "status": "RELEASED", "outcome": "SUCCESS"},
+        },
+    }
+
+
+def test_reject_lease_passes_when_coordinator_reacts_correctly():
+    results = check_reject_lease(REJECT_EVENTS, reject_state())
+    assert all_passed(results)
+    assert len(results) == 7
+
+
+def test_reject_lease_fails_if_lease_not_rejected():
+    results = check_reject_lease(REJECT_EVENTS, reject_state(lease_2_status="EXPIRED"))
+    assert failed(results) == ["node-rejector: lease-2 REJECTED with LOCAL_BUSY"]
+
+
+def test_reject_lease_fails_if_reason_not_kept():
+    results = check_reject_lease(REJECT_EVENTS, reject_state(lease_2_reason="OFFER_TIMEOUT"))
+    assert failed(results) == ["node-rejector: lease-2 REJECTED with LOCAL_BUSY"]
+
+
+def test_reject_lease_fails_if_rejector_not_excluded():
+    results = check_reject_lease(REJECT_EVENTS, reject_state(excluded=()))
+    assert failed(results) == ["node-rejector in job-2 rejected_provider_ids"]
+
+
+def test_reject_lease_fails_if_job_offered_to_rejector_again():
+    events = REJECT_EVENTS + [
+        event("node-rejector", "rejected", lease_id="lease-4", job_id="job-2", reason="LOCAL_BUSY")
+    ]
+    state = reject_state()
+    state["leases"]["lease-4"] = {"job_id": "job-2", "status": "REJECTED", "reason": "LOCAL_BUSY"}
+    assert failed(check_reject_lease(events, state)) == ["node-rejector not offered job-2 again"]
+
+
+def test_reject_lease_fails_if_rejection_used_an_attempt():
+    results = check_reject_lease(REJECT_EVENTS, reject_state(job_2_attempts=2))
+    assert failed(results) == ["job-2: rejection used no attempt"]
+
+
+def test_reject_lease_attempt_mismatch_is_inconclusive_with_network_errors():
+    events = REJECT_EVENTS + [event("node-normal", "network_error", error="ReadTimeout")]
+    results = check_reject_lease(events, reject_state(job_2_attempts=2))
+    assert failed(results) == []
+    assert inconclusive(results) == ["job-2: rejection used no attempt"]
+
+
+def test_reject_lease_fails_if_job_not_finished_elsewhere():
+    results = check_reject_lease(REJECT_EVENTS, reject_state(job_2_status="QUEUED"))
+    assert failed(results) == ["job-2 COMPLETED by another provider"]
+
+
+def test_reject_lease_fails_if_rejector_not_active():
+    results = check_reject_lease(REJECT_EVENTS, reject_state(rejector_status="STALE"))
+    assert failed(results) == ["node-rejector ACTIVE"]
+
+
+def test_reject_lease_fails_if_rejector_accepted_a_lease():
+    events = REJECT_EVENTS + [
+        event("node-rejector", "accepted", lease_id="lease-5", job_id="job-1")
+    ]
+    assert "node-rejector accepted no lease" in failed(check_reject_lease(events, reject_state()))
+
+
+def test_reject_lease_inconclusive_if_rejector_never_rejected():
+    events = [e for e in REJECT_EVENTS if e["event"] != "rejected"]
+    results = check_reject_lease(events, reject_state())
+    assert inconclusive(results) == ["node-rejector rejected an offer"]
+    assert failed(results) == []
+
+
+def test_reject_lease_inconclusive_if_records_missing():
+    results = check_reject_lease(REJECT_EVENTS, {"providers": reject_state()["providers"]})
+    assert inconclusive(results) == ["node-rejector: lease-2 checked"]
+
+
+def test_reject_lease_inconclusive_if_final_state_not_collected():
+    results = check_reject_lease(REJECT_EVENTS, {"error": "ConnectError: refused"})
+    assert results == [
+        {
+            "check": "final state collected",
+            "status": "INCONCLUSIVE",
+            "detail": "ConnectError: refused",
+        }
+    ]
+
+
+def test_reject_lease_checks_every_rejector():
+    events = REJECT_EVENTS + [
+        event("node-rejector-2", "registered", behavior="reject_lease"),
+        event(
+            "node-rejector-2", "rejected", lease_id="lease-6", job_id="job-1", reason="LOCAL_BUSY"
+        ),
+    ]
+    state = reject_state()
+    state["providers"]["node-rejector-2"] = {"status": "ACTIVE"}
+    state["leases"]["lease-6"] = {"job_id": "job-1", "status": "REJECTED", "reason": "LOCAL_BUSY"}
+    # job-1 never excluded node-rejector-2
+    assert failed(check_reject_lease(events, state)) == [
+        "node-rejector-2 in job-1 rejected_provider_ids"
+    ]
+
+
+def test_reject_lease_inconclusive_if_no_provider_used_it():
+    results = check_reject_lease([event("node-normal", "registered", behavior="normal")], {})
+    assert [r["status"] for r in results] == ["INCONCLUSIVE"]
+
+
+# lease: capability_lie
+
+LIE_EVENTS = [
+    event("node-normal", "registered", behavior="normal"),
+    event("node-liar", "registered", behavior="capability_lie"),
+    event("node-normal", "accepted", lease_id="lease-1", job_id="job-1", planned_outcome="SUCCESS"),
+    event("node-liar", "accepted", lease_id="lease-2", job_id="job-2", planned_outcome="FAILURE"),
+    event(
+        "node-liar", "reported", lease_id="lease-2", outcome="FAILURE", reason="CAPABILITY_MISMATCH"
+    ),
+    event("node-normal", "reported", lease_id="lease-1", outcome="SUCCESS", reason=None),
+    event("node-normal", "accepted", lease_id="lease-3", job_id="job-2", planned_outcome="SUCCESS"),
+    event("node-normal", "reported", lease_id="lease-3", outcome="SUCCESS", reason=None),
+]
+
+
+def lie_state(
+    lease_2_reason="CAPABILITY_MISMATCH",
+    excluded=("node-liar",),
+    job_2_attempts=2,
+    job_2_status="COMPLETED",
+    last_failure_reason="CAPABILITY_MISMATCH",
+    liar_status="ACTIVE",
+):
+    return {
+        "providers": {
+            "node-normal": {"status": "ACTIVE"},
+            "node-liar": {"status": liar_status},
+        },
+        "jobs": {
+            "job-1": {"status": "COMPLETED", "attempt_count": 1, "rejected_provider_ids": []},
+            "job-2": {
+                "status": job_2_status,
+                "attempt_count": job_2_attempts,
+                "rejected_provider_ids": list(excluded),
+                "last_failure_reason": last_failure_reason,
+            },
+        },
+        "leases": {
+            "lease-1": {"job_id": "job-1", "status": "RELEASED", "outcome": "SUCCESS"},
+            "lease-2": {
+                "job_id": "job-2",
+                "status": "RELEASED",
+                "outcome": "FAILURE",
+                "reason": lease_2_reason,
+            },
+            "lease-3": {"job_id": "job-2", "status": "RELEASED", "outcome": "SUCCESS"},
+        },
+    }
+
+
+def test_capability_lie_passes_when_coordinator_reacts_correctly():
+    results = check_capability_lie(LIE_EVENTS, lie_state())
+    assert all_passed(results)
+    assert len(results) == 7
+
+
+def test_capability_lie_fails_if_lease_reason_wrong():
+    results = check_capability_lie(LIE_EVENTS, lie_state(lease_2_reason="RUNTIME_ERROR"))
+    assert failed(results) == ["node-liar: lease-2 RELEASED with CAPABILITY_MISMATCH"]
+
+
+def test_capability_lie_fails_if_liar_not_excluded():
+    results = check_capability_lie(LIE_EVENTS, lie_state(excluded=()))
+    assert failed(results) == ["node-liar in job-2 rejected_provider_ids"]
+
+
+def test_capability_lie_fails_if_liar_not_active():
+    results = check_capability_lie(LIE_EVENTS, lie_state(liar_status="STALE"))
+    assert failed(results) == ["node-liar ACTIVE"]
+
+
+def test_capability_lie_fails_if_job_never_retried():
+    events = LIE_EVENTS[:-2]
+    results = check_capability_lie(events, lie_state(job_2_attempts=1, job_2_status="QUEUED"))
+    assert failed(results) == ["job-2 retried on another provider", "job-2 COMPLETED after a retry"]
+
+
+def test_capability_lie_fails_if_job_offered_to_liar_again():
+    events = LIE_EVENTS + [
+        event(
+            "node-liar", "accepted", lease_id="lease-4", job_id="job-2", planned_outcome="FAILURE"
+        )
+    ]
+    assert "node-liar not offered job-2 again" in failed(check_capability_lie(events, lie_state()))
+
+
+def test_capability_lie_fails_if_last_failure_reason_wrong():
+    results = check_capability_lie(LIE_EVENTS, lie_state(last_failure_reason=None))
+    assert failed(results) == ["job-2 last_failure_reason CAPABILITY_MISMATCH"]
+
+
+def test_capability_lie_skips_last_failure_reason_after_a_later_failure():
+    # job-2 failed again on another node after the mismatch, so its reason changed
+    events = LIE_EVENTS[:-2] + [
+        event(
+            "node-flaky", "accepted", lease_id="lease-3", job_id="job-2", planned_outcome="FAILURE"
+        ),
+        event("node-flaky", "reported", lease_id="lease-3", outcome="FAILURE", reason="DISK_FULL"),
+        event(
+            "node-normal", "accepted", lease_id="lease-4", job_id="job-2", planned_outcome="SUCCESS"
+        ),
+        event("node-normal", "reported", lease_id="lease-4", outcome="SUCCESS", reason=None),
+    ]
+    state = lie_state(job_2_attempts=3, last_failure_reason="DISK_FULL")
+    results = check_capability_lie(events, state)
+    assert all_passed(results)
+    assert "job-2 last_failure_reason CAPABILITY_MISMATCH" not in [r["check"] for r in results]
+
+
+def test_capability_lie_checks_jobs_the_liar_can_run():
+    events = LIE_EVENTS + [
+        event(
+            "node-liar", "accepted", lease_id="lease-5", job_id="job-3", planned_outcome="SUCCESS"
+        ),
+        event("node-liar", "reported", lease_id="lease-5", outcome="SUCCESS", reason=None),
+    ]
+    state = lie_state()
+    state["leases"]["lease-5"] = {"job_id": "job-3", "status": "RELEASED", "outcome": "SUCCESS"}
+    assert all_passed(check_capability_lie(events, state))
+
+    state["leases"]["lease-5"]["outcome"] = "FAILURE"
+    assert failed(check_capability_lie(events, state)) == [
+        "node-liar: lease-5 SUCCESS on a job it can run"
+    ]
+
+
+def test_capability_lie_inconclusive_if_no_mismatch_reported():
+    events = [e for e in LIE_EVENTS if e["provider"] != "node-liar" or e["event"] == "registered"]
+    results = check_capability_lie(events, lie_state())
+    assert inconclusive(results) == ["node-liar reported CAPABILITY_MISMATCH"]
+    assert failed(results) == []
+
+
+def test_capability_lie_inconclusive_if_mismatch_never_reported():
+    events = [
+        e for e in LIE_EVENTS if not (e["provider"] == "node-liar" and e["event"] == "reported")
+    ]
+    results = check_capability_lie(events, lie_state())
+    assert inconclusive(results) == [
+        "node-liar reported CAPABILITY_MISMATCH",
+        "node-liar: lease-2 reported",
+    ]
+
+
+def test_capability_lie_inconclusive_if_records_missing():
+    results = check_capability_lie(LIE_EVENTS, {"providers": lie_state()["providers"]})
+    assert inconclusive(results) == ["node-liar: lease-2 checked"]
+
+
+def test_capability_lie_inconclusive_if_final_state_not_collected():
+    results = check_capability_lie(LIE_EVENTS, {"error": "ReadTimeout: "})
+    assert [r["status"] for r in results] == ["INCONCLUSIVE"]
+
+
+def test_capability_lie_inconclusive_if_no_provider_used_it():
+    results = check_capability_lie([event("node-normal", "registered", behavior="normal")], {})
+    assert [r["status"] for r in results] == ["INCONCLUSIVE"]
+
+
+def test_run_checks_runs_the_lease_checks():
+    results = run_checks(REJECT_EVENTS, reject_state())
+    assert "node-rejector: lease-2 REJECTED with LOCAL_BUSY" in [r["check"] for r in results]
