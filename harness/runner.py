@@ -12,10 +12,12 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 import yaml
 
 from harness.checks import run_checks
 from harness.client import CoordinatorClient
+from harness.errors import CoordinatorError
 from harness.provider import FakeProvider
 
 
@@ -86,10 +88,12 @@ async def run_scenario(config_path):
                 print(f"[{event['provider']}] {event['event']}")
         await asyncio.sleep(1)
 
-    final_state = await collect_final_state(client, events, job_ids)
-
-    # clean client
-    await client.close()
+    try:
+        final_state = await collect_final_state(client, events, job_ids)
+    except (CoordinatorError, httpx.TransportError) as error:
+        final_state = {"error": f"{type(error).__name__}: {error}"}
+    finally:
+        await client.close()
 
     results = run_checks(events, final_state)
     print_results(results)
@@ -99,14 +103,21 @@ async def run_scenario(config_path):
 
 async def collect_final_state(client, events, job_ids):
     """Ask the coordinator for its records at the end of the run, for the checks.
-    Leases come from the providers' events and each job's current lease. The
-    coordinator has no GET /providers/{id} yet, so providers are only counted (/status).
+    Providers are read from the "registered" events, and the leases are read from the providers'
+    events, and each job's current lease.
     """
+    provider_ids = sorted({e["provider"] for e in events if e["event"] == "registered"})
+    providers = {pid: await client.get_provider(pid) for pid in provider_ids}
     jobs = {job_id: await client.get_job(job_id) for job_id in job_ids}
     lease_ids = {e["lease_id"] for e in events if e.get("lease_id")}
     lease_ids |= {job["current_lease_id"] for job in jobs.values() if job.get("current_lease_id")}
     leases = {lease_id: await client.get_lease(lease_id) for lease_id in sorted(lease_ids)}
-    return {"status": await client.get_status(), "jobs": jobs, "leases": leases}
+    return {
+        "status": await client.get_status(),
+        "providers": providers,
+        "jobs": jobs,
+        "leases": leases,
+    }
 
 
 def print_results(results):

@@ -1,12 +1,10 @@
-"""Checks for expected reactions to failurees caused by heartbeat variances.
+"""Checks for expected reactions to failures caused by heartbeat variances.
 
 events: every provider's event log from the run (dicts with "provider", "event", ...).
 final_state: the coordinator's records at the end of the run:
-    {"status": GET /status response, "jobs": {job_id: record}, "leases": {lease_id: record}}
+    {"status": GET /status response, "providers": {provider_id: record},
+     "jobs": {job_id: record}, "leases": {lease_id: record}}
 Each check returns a list of results: {"check": ..., "status": "PASS" or "FAIL", "detail": ...}.
-
-#TODO: The coordinator has no GET /providers/{id} yet, so provider states come from the
-/status counts. This works while each scenario has one provider per expected state.
 """
 
 
@@ -18,12 +16,6 @@ def result(check, passed, detail):
 def record(final_state, kind, record_id):
     """Return a record from final_state, or {} if the run did not fetch it."""
     return final_state.get(kind, {}).get(record_id, {})
-
-
-def provider_counts(final_state):
-    """Return how many providers the coordinator has in each status,
-    e.g. {"ACTIVE": 1, "STALE": 1}."""
-    return final_state.get("status", {}).get("providers", {})
 
 
 def registered_providers(events):
@@ -52,22 +44,16 @@ def unfinished_leases(events, provider_id):
 
 
 def check_disappear(events, final_state):
-    """Provider becomes STALE; its leases are revoked; jobs retry elsewhere."""
+    """Provider becomes STALE, its leases are revoked, jobs retry elsewhere."""
     vanished = providers_with_behavior(events, "disappear")
     if not vanished:
         return [result("disappear provider in run", False, "no provider used disappear")]
 
-    counts = provider_counts(final_state)
-    stale = counts.get("STALE", 0)
-    results = [
-        result(
-            f"{len(vanished)} provider(s) STALE",
-            stale == len(vanished),
-            f"provider counts {counts}",
-        )
-    ]
-
+    results = []
     for provider_id in vanished:
+        status = record(final_state, "providers", provider_id).get("status")
+        results.append(result(f"{provider_id} STALE", status == "STALE", f"status {status}"))
+
         for lease_id in unfinished_leases(events, provider_id):
             lease = record(final_state, "leases", lease_id)
             revoked = lease.get("status") == "REVOKED" and lease.get("reason") == "PROVIDER_STALE"
@@ -97,15 +83,10 @@ def check_clock_skew(events, final_state):
     if not skewed:
         return [result("clock_skew provider in run", False, "no provider used clock_skew")]
 
-    counts = provider_counts(final_state)
-    total = len(registered_providers(events))
-    results = [
-        result(
-            f"all {total} providers ACTIVE",
-            counts.get("ACTIVE", 0) == total,
-            f"provider counts {counts}",
-        )
-    ]
+    results = []
+    for provider_id in registered_providers(events):
+        status = record(final_state, "providers", provider_id).get("status")
+        results.append(result(f"{provider_id} ACTIVE", status == "ACTIVE", f"status {status}"))
 
     stale_leases = [
         lease_id

@@ -32,7 +32,10 @@ DISAPPEAR_EVENTS = [
 
 def disappear_state(vanished_status="STALE", lease_1_reason="PROVIDER_STALE"):
     return {
-        "status": {"providers": {"ACTIVE": 1, vanished_status: 1}},
+        "providers": {
+            "node-normal": {"status": "ACTIVE"},
+            "node-vanishes": {"status": vanished_status},
+        },
         "jobs": {
             "job-1": {"status": "COMPLETED", "attempt_count": 2},
             "job-2": {"status": "COMPLETED", "attempt_count": 1},
@@ -54,7 +57,7 @@ def test_disappear_passes_when_coordinator_reacts_correctly():
 def test_disappear_fails_if_provider_never_goes_stale():
     results = check_disappear(DISAPPEAR_EVENTS, disappear_state(vanished_status="ACTIVE"))
     failed = [r["check"] for r in results if r["status"] == "FAIL"]
-    assert failed == ["1 provider(s) STALE"]
+    assert failed == ["node-vanishes STALE"]
 
 
 def test_disappear_fails_if_lease_revoked_for_wrong_reason():
@@ -83,10 +86,12 @@ SKEW_EVENTS = [
 
 
 def skew_state(behind_status="ACTIVE", job_2_attempts=1, lease_reason=None):
-    counts = {"ACTIVE": 2}
-    counts[behind_status] = counts.get(behind_status, 0) + 1
     return {
-        "status": {"providers": counts},
+        "providers": {
+            "node-normal": {"status": "ACTIVE"},
+            "node-skew-ahead": {"status": "ACTIVE"},
+            "node-skew-behind": {"status": behind_status},
+        },
         "jobs": {
             "job-1": {"status": "COMPLETED", "attempt_count": 1},
             "job-2": {"status": "COMPLETED", "attempt_count": job_2_attempts},
@@ -105,7 +110,7 @@ def test_clock_skew_passes_when_coordinator_ignores_provider_time():
 def test_clock_skew_fails_if_skewed_provider_goes_stale():
     results = check_clock_skew(SKEW_EVENTS, skew_state(behind_status="STALE"))
     failed = [r["check"] for r in results if r["status"] == "FAIL"]
-    assert failed == ["all 3 providers ACTIVE"]
+    assert failed == ["node-skew-behind ACTIVE"]
 
 
 def test_clock_skew_fails_if_a_job_needed_a_retry():
@@ -137,6 +142,9 @@ class StateClient:
     async def get_lease(self, lease_id):
         return {"lease_id": lease_id}
 
+    async def get_provider(self, provider_id):
+        return {"provider_id": provider_id, "status": "ACTIVE"}
+
     async def get_status(self):
         return {"providers": {"ACTIVE": 2}, "jobs": {}, "leases": {}}
 
@@ -153,12 +161,14 @@ def test_collect_final_state_fetches_jobs_status_and_every_known_lease():
     # lease-1 and lease-2 from events, lease-9 from job-1's current lease
     assert set(state["leases"]) == {"lease-1", "lease-2", "lease-9"}
     assert state["status"]["providers"] == {"ACTIVE": 2}
+    # only p1 registered, so only p1 is fetched
+    assert set(state["providers"]) == {"p1"}
 
 
 def test_run_checks_runs_the_check_of_each_behavior_in_the_run():
     results = run_checks(SKEW_EVENTS, skew_state())
     checks = [r["check"] for r in results]
-    assert "all 3 providers ACTIVE" in checks
+    assert "node-skew-behind ACTIVE" in checks
     # disappear was not in this run, so its check does not run
     assert "disappear provider in run" not in checks
 
