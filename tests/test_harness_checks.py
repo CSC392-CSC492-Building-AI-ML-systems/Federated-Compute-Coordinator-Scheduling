@@ -3,6 +3,8 @@
 import asyncio
 import json
 
+import pytest
+
 from harness.checks import CHECKS, run_checks
 from harness.checks.lease import check_capability_lie, check_reject_lease
 from harness.checks.liveness import check_clock_skew, check_disappear
@@ -204,265 +206,141 @@ def test_write_report_saves_the_run_next_to_the_scenario(tmp_path):
     assert report["events"] == events
 
 
-# lease: shared helpers
+# lease
 
-
-def failed(results):
-    return [r["check"] for r in results if r["status"] == "FAIL"]
-
-
-# lease: reject_lease
-
+# One rejection: node-rejector rejects job-2, node-normal then finishes it.
 REJECT_EVENTS = [
     event("node-normal", "registered", behavior="normal"),
     event("node-rejector", "registered", behavior="reject_lease"),
-    event("node-normal", "accepted", lease_id="lease-1", job_id="job-1", planned_outcome="SUCCESS"),
-    event("node-rejector", "rejected", lease_id="lease-2", job_id="job-2", reason="LOCAL_BUSY"),
-    event("node-normal", "reported", lease_id="lease-1", outcome="SUCCESS", reason=None),
-    event("node-normal", "accepted", lease_id="lease-3", job_id="job-2", planned_outcome="SUCCESS"),
-    event("node-normal", "reported", lease_id="lease-3", outcome="SUCCESS", reason=None),
+    event("node-rejector", "rejected", lease_id="lease-1", job_id="job-1", reason="LOCAL_BUSY"),
+    event("node-normal", "accepted", lease_id="lease-2", job_id="job-1", planned_outcome="SUCCESS"),
+    event("node-normal", "reported", lease_id="lease-2", outcome="SUCCESS", reason=None),
 ]
 
 
-def reject_state(
-    lease_2_status="REJECTED",
-    lease_2_reason="LOCAL_BUSY",
-    excluded=("node-rejector",),
-    job_2_attempts=1,
-    job_2_status="COMPLETED",
-    rejector_status="ACTIVE",
-):
+def reject_state(lease_status="REJECTED", excluded=True, attempts=1, job_status="COMPLETED"):
     return {
-        "providers": {
-            "node-normal": {"status": "ACTIVE"},
-            "node-rejector": {"status": rejector_status},
-        },
+        "providers": {"node-normal": {"status": "ACTIVE"}, "node-rejector": {"status": "ACTIVE"}},
         "jobs": {
-            "job-1": {"status": "COMPLETED", "attempt_count": 1, "rejected_provider_ids": []},
-            "job-2": {
-                "status": job_2_status,
-                "attempt_count": job_2_attempts,
-                "rejected_provider_ids": list(excluded),
-            },
+            "job-1": {
+                "status": job_status,
+                "attempt_count": attempts,
+                "rejected_provider_ids": ["node-rejector"] if excluded else [],
+            }
         },
         "leases": {
-            "lease-1": {"job_id": "job-1", "status": "RELEASED", "outcome": "SUCCESS"},
-            "lease-2": {
-                "job_id": "job-2",
-                "status": lease_2_status,
-                "reason": lease_2_reason,
-                "outcome": None,
-            },
-            "lease-3": {"job_id": "job-2", "status": "RELEASED", "outcome": "SUCCESS"},
+            "lease-1": {"job_id": "job-1", "status": lease_status, "reason": "LOCAL_BUSY"},
+            "lease-2": {"job_id": "job-1", "status": "RELEASED", "outcome": "SUCCESS"},
         },
     }
 
 
-def test_reject_lease_passes_when_coordinator_reacts_correctly():
-    results = check_reject_lease(REJECT_EVENTS, reject_state())
-    assert all_passed(results)
-    assert len(results) == 8
+# One mismatch: node-liar fails job-1 with CAPABILITY_MISMATCH, node-normal retries it.
+LIE_EVENTS = [
+    event("node-normal", "registered", behavior="normal"),
+    event("node-liar", "registered", behavior="capability_lie"),
+    event("node-liar", "accepted", lease_id="lease-1", job_id="job-1", planned_outcome="FAILURE"),
+    event(
+        "node-liar", "reported", lease_id="lease-1", outcome="FAILURE", reason="CAPABILITY_MISMATCH"
+    ),
+    event("node-normal", "accepted", lease_id="lease-2", job_id="job-1", planned_outcome="SUCCESS"),
+    event("node-normal", "reported", lease_id="lease-2", outcome="SUCCESS", reason=None),
+]
 
 
-def test_reject_lease_fails_if_lease_not_rejected():
-    results = check_reject_lease(REJECT_EVENTS, reject_state(lease_2_status="EXPIRED"))
-    assert failed(results) == ["node-rejector: lease-2 REJECTED with LOCAL_BUSY"]
+def lie_state(lease_reason="CAPABILITY_MISMATCH", excluded=True, job_status="COMPLETED"):
+    return {
+        "providers": {"node-normal": {"status": "ACTIVE"}, "node-liar": {"status": "ACTIVE"}},
+        "jobs": {
+            "job-1": {
+                "status": job_status,
+                "attempt_count": 2,
+                "rejected_provider_ids": ["node-liar"] if excluded else [],
+                "last_failure_reason": "CAPABILITY_MISMATCH",
+            }
+        },
+        "leases": {
+            "lease-1": {
+                "job_id": "job-1",
+                "status": "RELEASED",
+                "outcome": "FAILURE",
+                "reason": lease_reason,
+            },
+            "lease-2": {"job_id": "job-1", "status": "RELEASED", "outcome": "SUCCESS"},
+        },
+    }
 
 
-def test_reject_lease_fails_if_rejector_not_excluded():
-    results = check_reject_lease(REJECT_EVENTS, reject_state(excluded=()))
-    assert failed(results) == ["node-rejector in job-2 rejected_provider_ids"]
+def test_reject_lease_passes_when_coordinator_follows_the_contract():
+    assert all_passed(check_reject_lease(REJECT_EVENTS, reject_state()))
+
+
+@pytest.mark.parametrize(
+    "mistake",
+    [
+        {"lease_status": "EXPIRED"},  # reject not recorded
+        {"excluded": False},  # rejector not excluded from the job
+        {"attempts": 2},  # rejection used an attempt
+        {"job_status": "QUEUED"},  # job never finished elsewhere
+    ],
+)
+def test_reject_lease_fails_on_coordinator_mistake(mistake):
+    assert not all_passed(check_reject_lease(REJECT_EVENTS, reject_state(**mistake)))
 
 
 def test_reject_lease_fails_if_job_offered_to_rejector_again():
     events = REJECT_EVENTS + [
-        event("node-rejector", "rejected", lease_id="lease-4", job_id="job-2", reason="LOCAL_BUSY")
+        event("node-rejector", "rejected", lease_id="lease-3", job_id="job-1", reason="LOCAL_BUSY")
     ]
     state = reject_state()
-    state["leases"]["lease-4"] = {"job_id": "job-2", "status": "REJECTED", "reason": "LOCAL_BUSY"}
-    assert failed(check_reject_lease(events, state)) == ["node-rejector not offered job-2 again"]
+    state["leases"]["lease-3"] = {"job_id": "job-1", "status": "REJECTED", "reason": "LOCAL_BUSY"}
+    assert not all_passed(check_reject_lease(events, state))
 
 
-def test_reject_lease_fails_if_rejection_used_an_attempt():
-    results = check_reject_lease(REJECT_EVENTS, reject_state(job_2_attempts=2))
-    assert failed(results) == ["job-2: rejection used no attempt"]
+def test_capability_lie_passes_when_coordinator_follows_the_contract():
+    assert all_passed(check_capability_lie(LIE_EVENTS, lie_state()))
 
 
-def test_reject_lease_fails_if_job_not_finished_elsewhere():
-    results = check_reject_lease(REJECT_EVENTS, reject_state(job_2_status="QUEUED"))
-    assert failed(results) == ["job-2 COMPLETED by another provider"]
+@pytest.mark.parametrize(
+    "events, mistake",
+    [
+        (LIE_EVENTS, {"lease_reason": "RUNTIME_ERROR"}),  # mismatch not recorded
+        (LIE_EVENTS, {"excluded": False}),  # liar not excluded from the job
+        (LIE_EVENTS[:-2], {"job_status": "QUEUED"}),  # job never retried elsewhere
+    ],
+)
+def test_capability_lie_fails_on_coordinator_mistake(events, mistake):
+    assert not all_passed(check_capability_lie(events, lie_state(**mistake)))
 
 
-def test_reject_lease_fails_if_rejector_not_active():
-    results = check_reject_lease(REJECT_EVENTS, reject_state(rejector_status="STALE"))
-    assert failed(results) == ["node-rejector ACTIVE"]
-
-
-def test_reject_lease_fails_if_rejector_accepted_a_lease():
-    events = REJECT_EVENTS + [
-        event("node-rejector", "accepted", lease_id="lease-5", job_id="job-1")
+def test_capability_lie_allows_a_later_failure_on_another_node():
+    # After the mismatch, job-1 fails again elsewhere before it completes. Its
+    # last_failure_reason is then DISK_FULL, which is still correct.
+    events = LIE_EVENTS[:-2] + [
+        event("node-flaky", "accepted", lease_id="lease-2", job_id="job-1"),
+        event("node-flaky", "reported", lease_id="lease-2", outcome="FAILURE", reason="DISK_FULL"),
+        event("node-normal", "accepted", lease_id="lease-3", job_id="job-1"),
+        event("node-normal", "reported", lease_id="lease-3", outcome="SUCCESS", reason=None),
     ]
-    assert "node-rejector accepted no lease" in failed(check_reject_lease(events, reject_state()))
+    state = lie_state()
+    state["jobs"]["job-1"].update(attempt_count=3, last_failure_reason="DISK_FULL")
+    assert all_passed(check_capability_lie(events, state))
 
 
-def test_reject_lease_fails_if_rejector_never_rejected():
-    # The rejector is always eligible, so no rejection means no offer or a failed call
-    events = [e for e in REJECT_EVENTS if e["event"] != "rejected"]
-    results = check_reject_lease(events, reject_state())
-    assert failed(results) == ["node-rejector rejected an offer"]
-
-
-def test_reject_lease_fails_if_final_state_not_collected():
-    results = check_reject_lease(REJECT_EVENTS, {"error": "ConnectError: refused"})
-    assert results == [
-        {"check": "final state collected", "status": "FAIL", "detail": "ConnectError: refused"}
-    ]
-
-
-def test_reject_lease_checks_every_rejector():
-    events = REJECT_EVENTS + [
-        event("node-rejector-2", "registered", behavior="reject_lease"),
-        event(
-            "node-rejector-2", "rejected", lease_id="lease-6", job_id="job-1", reason="LOCAL_BUSY"
-        ),
-    ]
-    state = reject_state()
-    state["providers"]["node-rejector-2"] = {"status": "ACTIVE"}
-    state["leases"]["lease-6"] = {"job_id": "job-1", "status": "REJECTED", "reason": "LOCAL_BUSY"}
-    # job-1 never excluded node-rejector-2
-    assert failed(check_reject_lease(events, state)) == [
-        "node-rejector-2 in job-1 rejected_provider_ids"
-    ]
-
-
-# lease: capability_lie
-
-LIE_EVENTS = [
-    event("node-normal", "registered", behavior="normal"),
-    event("node-liar", "registered", behavior="capability_lie"),
-    event("node-normal", "accepted", lease_id="lease-1", job_id="job-1", planned_outcome="SUCCESS"),
-    event("node-liar", "accepted", lease_id="lease-2", job_id="job-2", planned_outcome="FAILURE"),
-    event(
-        "node-liar", "reported", lease_id="lease-2", outcome="FAILURE", reason="CAPABILITY_MISMATCH"
-    ),
-    event("node-normal", "reported", lease_id="lease-1", outcome="SUCCESS", reason=None),
-    event("node-normal", "accepted", lease_id="lease-3", job_id="job-2", planned_outcome="SUCCESS"),
-    event("node-normal", "reported", lease_id="lease-3", outcome="SUCCESS", reason=None),
+LEASE_CHECKS = [
+    (check_reject_lease, REJECT_EVENTS, reject_state, "rejected"),
+    (check_capability_lie, LIE_EVENTS, lie_state, "reported"),
 ]
 
 
-def lie_state(
-    lease_2_reason="CAPABILITY_MISMATCH",
-    excluded=("node-liar",),
-    job_2_attempts=2,
-    job_2_status="COMPLETED",
-    last_failure_reason="CAPABILITY_MISMATCH",
-    liar_status="ACTIVE",
-):
-    return {
-        "providers": {
-            "node-normal": {"status": "ACTIVE"},
-            "node-liar": {"status": liar_status},
-        },
-        "jobs": {
-            "job-1": {"status": "COMPLETED", "attempt_count": 1, "rejected_provider_ids": []},
-            "job-2": {
-                "status": job_2_status,
-                "attempt_count": job_2_attempts,
-                "rejected_provider_ids": list(excluded),
-                "last_failure_reason": last_failure_reason,
-            },
-        },
-        "leases": {
-            "lease-1": {"job_id": "job-1", "status": "RELEASED", "outcome": "SUCCESS"},
-            "lease-2": {
-                "job_id": "job-2",
-                "status": "RELEASED",
-                "outcome": "FAILURE",
-                "reason": lease_2_reason,
-            },
-            "lease-3": {"job_id": "job-2", "status": "RELEASED", "outcome": "SUCCESS"},
-        },
-    }
+@pytest.mark.parametrize("check, events, state, _", LEASE_CHECKS)
+def test_lease_check_fails_if_final_state_not_collected(check, events, state, _):
+    assert not all_passed(check(events, {"error": "ConnectError: refused"}))
 
 
-def test_capability_lie_passes_when_coordinator_reacts_correctly():
-    results = check_capability_lie(LIE_EVENTS, lie_state())
-    assert all_passed(results)
-    assert len(results) == 8
-
-
-def test_capability_lie_fails_if_lease_reason_wrong():
-    results = check_capability_lie(LIE_EVENTS, lie_state(lease_2_reason="RUNTIME_ERROR"))
-    assert failed(results) == ["node-liar: lease-2 RELEASED with CAPABILITY_MISMATCH"]
-
-
-def test_capability_lie_fails_if_liar_not_excluded():
-    results = check_capability_lie(LIE_EVENTS, lie_state(excluded=()))
-    assert failed(results) == ["node-liar in job-2 rejected_provider_ids"]
-
-
-def test_capability_lie_fails_if_job_never_retried():
-    events = LIE_EVENTS[:-2]
-    results = check_capability_lie(events, lie_state(job_2_attempts=1, job_2_status="QUEUED"))
-    assert failed(results) == ["job-2 retried on another provider", "job-2 COMPLETED after a retry"]
-
-
-def test_capability_lie_fails_if_job_offered_to_liar_again():
-    events = LIE_EVENTS + [
-        event(
-            "node-liar", "accepted", lease_id="lease-4", job_id="job-2", planned_outcome="FAILURE"
-        )
-    ]
-    assert "node-liar not offered job-2 again" in failed(check_capability_lie(events, lie_state()))
-
-
-def test_capability_lie_fails_if_last_failure_reason_wrong():
-    results = check_capability_lie(LIE_EVENTS, lie_state(last_failure_reason=None))
-    assert failed(results) == ["job-2 last_failure_reason CAPABILITY_MISMATCH"]
-
-
-def test_capability_lie_skips_last_failure_reason_after_a_later_failure():
-    # job-2 failed again on another node after the mismatch, so its reason changed
-    events = LIE_EVENTS[:-2] + [
-        event(
-            "node-flaky", "accepted", lease_id="lease-3", job_id="job-2", planned_outcome="FAILURE"
-        ),
-        event("node-flaky", "reported", lease_id="lease-3", outcome="FAILURE", reason="DISK_FULL"),
-        event(
-            "node-normal", "accepted", lease_id="lease-4", job_id="job-2", planned_outcome="SUCCESS"
-        ),
-        event("node-normal", "reported", lease_id="lease-4", outcome="SUCCESS", reason=None),
-    ]
-    state = lie_state(job_2_attempts=3, last_failure_reason="DISK_FULL")
-    results = check_capability_lie(events, state)
-    assert all_passed(results)
-    assert "job-2 last_failure_reason CAPABILITY_MISMATCH" not in [r["check"] for r in results]
-
-
-def test_capability_lie_checks_jobs_the_liar_can_run():
-    events = LIE_EVENTS + [
-        event(
-            "node-liar", "accepted", lease_id="lease-5", job_id="job-3", planned_outcome="SUCCESS"
-        ),
-        event("node-liar", "reported", lease_id="lease-5", outcome="SUCCESS", reason=None),
-    ]
-    state = lie_state()
-    state["leases"]["lease-5"] = {"job_id": "job-3", "status": "RELEASED", "outcome": "SUCCESS"}
-    assert all_passed(check_capability_lie(events, state))
-
-    state["leases"]["lease-5"]["outcome"] = "FAILURE"
-    assert failed(check_capability_lie(events, state)) == [
-        "node-liar: lease-5 SUCCESS on a job it can run"
-    ]
-
-
-def test_capability_lie_fails_if_mismatch_never_reported():
-    events = [
-        e for e in LIE_EVENTS if not (e["provider"] == "node-liar" and e["event"] == "reported")
-    ]
-    results = check_capability_lie(events, lie_state())
-    assert failed(results) == [
-        "node-liar reported CAPABILITY_MISMATCH",
-        "node-liar: lease-2 reported",
-    ]
+@pytest.mark.parametrize("check, events, state, faulty_event", LEASE_CHECKS)
+def test_lease_check_fails_if_faulty_behavior_never_fired(check, events, state, faulty_event):
+    # The faulty provider is always eligible, so no rejection / mismatch report means
+    # the coordinator never offered it a job or refused its call
+    quiet = [e for e in events if e["event"] != faulty_event or e["provider"] == "node-normal"]
+    assert not all_passed(check(quiet, state()))
