@@ -211,10 +211,6 @@ def failed(results):
     return [r["check"] for r in results if r["status"] == "FAIL"]
 
 
-def inconclusive(results):
-    return [r["check"] for r in results if r["status"] == "INCONCLUSIVE"]
-
-
 # lease: reject_lease
 
 REJECT_EVENTS = [
@@ -292,13 +288,6 @@ def test_reject_lease_fails_if_rejection_used_an_attempt():
     assert failed(results) == ["job-2: rejection used no attempt"]
 
 
-def test_reject_lease_attempt_mismatch_is_inconclusive_with_network_errors():
-    events = REJECT_EVENTS + [event("node-normal", "network_error", error="ReadTimeout")]
-    results = check_reject_lease(events, reject_state(job_2_attempts=2))
-    assert failed(results) == []
-    assert inconclusive(results) == ["job-2: rejection used no attempt"]
-
-
 def test_reject_lease_fails_if_job_not_finished_elsewhere():
     results = check_reject_lease(REJECT_EVENTS, reject_state(job_2_status="QUEUED"))
     assert failed(results) == ["job-2 COMPLETED by another provider"]
@@ -321,22 +310,12 @@ def test_reject_lease_fails_if_rejector_never_rejected():
     events = [e for e in REJECT_EVENTS if e["event"] != "rejected"]
     results = check_reject_lease(events, reject_state())
     assert failed(results) == ["node-rejector rejected an offer"]
-    assert inconclusive(results) == []
 
 
-def test_reject_lease_inconclusive_if_records_missing():
-    results = check_reject_lease(REJECT_EVENTS, {"providers": reject_state()["providers"]})
-    assert inconclusive(results) == ["node-rejector: lease-2 checked"]
-
-
-def test_reject_lease_inconclusive_if_final_state_not_collected():
+def test_reject_lease_fails_if_final_state_not_collected():
     results = check_reject_lease(REJECT_EVENTS, {"error": "ConnectError: refused"})
     assert results == [
-        {
-            "check": "final state collected",
-            "status": "INCONCLUSIVE",
-            "detail": "ConnectError: refused",
-        }
+        {"check": "final state collected", "status": "FAIL", "detail": "ConnectError: refused"}
     ]
 
 
@@ -483,5 +462,7 @@ def test_capability_lie_fails_if_mismatch_never_reported():
         e for e in LIE_EVENTS if not (e["provider"] == "node-liar" and e["event"] == "reported")
     ]
     results = check_capability_lie(events, lie_state())
-    assert failed(results) == ["node-liar reported CAPABILITY_MISMATCH"]
-    assert inconclusive(results) == ["node-liar: lease-2 reported"]
+    assert failed(results) == [
+        "node-liar reported CAPABILITY_MISMATCH",
+        "node-liar: lease-2 reported",
+    ]
