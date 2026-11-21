@@ -208,3 +208,13 @@ async def drain(
                     job.current_lease_id = None
 
         return provider.model_copy(deep=True)
+
+
+async def get_provider(store: Store, provider_id: str) -> Provider:
+    """Retrieve a Provider record by its ID."""
+    async with store.lock:
+        provider = store.providers.get(provider_id)
+        if provider is None:
+            raise ProviderNotFound(provider_id)
+
+        return provider.model_copy(deep=True)

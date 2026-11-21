@@ -12,6 +12,7 @@ from coordinator.models.provider import (
     DrainResponse,
     HeartbeatRequest,
     HeartbeatResponse,
+    Provider,
     ProviderRegisterRequest,
     ProviderRegisterResponse,
 )
@@ -83,3 +84,16 @@ async def drain(
         status=provider.status,
         drain_deadline=provider.drain_deadline,
     )
+
+
+@router.get("/providers/{provider_id}", status_code=200, response_model=Provider)
+async def get_provider(
+    provider_id: str,
+    store: Store = Depends(get_store),
+):
+    """Retrieve the full Provider record."""
+    try:
+        provider = await provider_service.get_provider(store, provider_id)
+        return provider
+    except provider_service.ProviderNotFound as exc:
+        raise ApiError(404, "NOT_FOUND", str(exc)) from exc
