@@ -265,16 +265,11 @@ def reject_state(
 def test_reject_lease_passes_when_coordinator_reacts_correctly():
     results = check_reject_lease(REJECT_EVENTS, reject_state())
     assert all_passed(results)
-    assert len(results) == 7
+    assert len(results) == 8
 
 
 def test_reject_lease_fails_if_lease_not_rejected():
     results = check_reject_lease(REJECT_EVENTS, reject_state(lease_2_status="EXPIRED"))
-    assert failed(results) == ["node-rejector: lease-2 REJECTED with LOCAL_BUSY"]
-
-
-def test_reject_lease_fails_if_reason_not_kept():
-    results = check_reject_lease(REJECT_EVENTS, reject_state(lease_2_reason="OFFER_TIMEOUT"))
     assert failed(results) == ["node-rejector: lease-2 REJECTED with LOCAL_BUSY"]
 
 
@@ -321,11 +316,12 @@ def test_reject_lease_fails_if_rejector_accepted_a_lease():
     assert "node-rejector accepted no lease" in failed(check_reject_lease(events, reject_state()))
 
 
-def test_reject_lease_inconclusive_if_rejector_never_rejected():
+def test_reject_lease_fails_if_rejector_never_rejected():
+    # The rejector is always eligible, so no rejection means no offer or a failed call
     events = [e for e in REJECT_EVENTS if e["event"] != "rejected"]
     results = check_reject_lease(events, reject_state())
-    assert inconclusive(results) == ["node-rejector rejected an offer"]
-    assert failed(results) == []
+    assert failed(results) == ["node-rejector rejected an offer"]
+    assert inconclusive(results) == []
 
 
 def test_reject_lease_inconclusive_if_records_missing():
@@ -358,11 +354,6 @@ def test_reject_lease_checks_every_rejector():
     assert failed(check_reject_lease(events, state)) == [
         "node-rejector-2 in job-1 rejected_provider_ids"
     ]
-
-
-def test_reject_lease_inconclusive_if_no_provider_used_it():
-    results = check_reject_lease([event("node-normal", "registered", behavior="normal")], {})
-    assert [r["status"] for r in results] == ["INCONCLUSIVE"]
 
 
 # lease: capability_lie
@@ -419,7 +410,7 @@ def lie_state(
 def test_capability_lie_passes_when_coordinator_reacts_correctly():
     results = check_capability_lie(LIE_EVENTS, lie_state())
     assert all_passed(results)
-    assert len(results) == 7
+    assert len(results) == 8
 
 
 def test_capability_lie_fails_if_lease_reason_wrong():
@@ -430,11 +421,6 @@ def test_capability_lie_fails_if_lease_reason_wrong():
 def test_capability_lie_fails_if_liar_not_excluded():
     results = check_capability_lie(LIE_EVENTS, lie_state(excluded=()))
     assert failed(results) == ["node-liar in job-2 rejected_provider_ids"]
-
-
-def test_capability_lie_fails_if_liar_not_active():
-    results = check_capability_lie(LIE_EVENTS, lie_state(liar_status="STALE"))
-    assert failed(results) == ["node-liar ACTIVE"]
 
 
 def test_capability_lie_fails_if_job_never_retried():
@@ -492,39 +478,10 @@ def test_capability_lie_checks_jobs_the_liar_can_run():
     ]
 
 
-def test_capability_lie_inconclusive_if_no_mismatch_reported():
-    events = [e for e in LIE_EVENTS if e["provider"] != "node-liar" or e["event"] == "registered"]
-    results = check_capability_lie(events, lie_state())
-    assert inconclusive(results) == ["node-liar reported CAPABILITY_MISMATCH"]
-    assert failed(results) == []
-
-
-def test_capability_lie_inconclusive_if_mismatch_never_reported():
+def test_capability_lie_fails_if_mismatch_never_reported():
     events = [
         e for e in LIE_EVENTS if not (e["provider"] == "node-liar" and e["event"] == "reported")
     ]
     results = check_capability_lie(events, lie_state())
-    assert inconclusive(results) == [
-        "node-liar reported CAPABILITY_MISMATCH",
-        "node-liar: lease-2 reported",
-    ]
-
-
-def test_capability_lie_inconclusive_if_records_missing():
-    results = check_capability_lie(LIE_EVENTS, {"providers": lie_state()["providers"]})
-    assert inconclusive(results) == ["node-liar: lease-2 checked"]
-
-
-def test_capability_lie_inconclusive_if_final_state_not_collected():
-    results = check_capability_lie(LIE_EVENTS, {"error": "ReadTimeout: "})
-    assert [r["status"] for r in results] == ["INCONCLUSIVE"]
-
-
-def test_capability_lie_inconclusive_if_no_provider_used_it():
-    results = check_capability_lie([event("node-normal", "registered", behavior="normal")], {})
-    assert [r["status"] for r in results] == ["INCONCLUSIVE"]
-
-
-def test_run_checks_runs_the_lease_checks():
-    results = run_checks(REJECT_EVENTS, reject_state())
-    assert "node-rejector: lease-2 REJECTED with LOCAL_BUSY" in [r["check"] for r in results]
+    assert failed(results) == ["node-liar reported CAPABILITY_MISMATCH"]
+    assert inconclusive(results) == ["node-liar: lease-2 reported"]

@@ -7,9 +7,12 @@ final_state: the coordinator's records at the end of the run (see collect_final_
     or {"error": "..."} if collecting it failed.
 
 Each check returns a list of results {"check": ..., "status": ..., "detail": ...}:
-- PASS / FAIL: the event happened, and the coordinator reacted correctly / wrongly.
-- INCONCLUSIVE: the event the check needs never happened, or a record it needs was
-  not fetched, so the coordinator was not tested.
+- PASS / FAIL: the coordinator reacted correctly / wrongly. That includes the faulty
+  behavior never firing (no rejection, no mismatch report): in the lease scenarios the
+  faulty provider is always eligible for an offer, so that means the coordinator never
+  offered it a job or refused its reject / report call.
+- INCONCLUSIVE: a record the check needs was not fetched, or the harness cannot tell
+  who is at fault (for example after network errors), so the coordinator was not tested.
 """
 
 
@@ -57,7 +60,7 @@ def events_for_job(events, job_id, name=None):
 
 def provider_active(final_state, provider_id):
     """Result: the provider ends ACTIVE. Rejecting or a mismatch is not a liveness fault."""
-    
+
     provider = record(final_state, "providers", provider_id)
     if not provider:
         return inconclusive(f"{provider_id} ACTIVE", "provider record not fetched")
@@ -109,13 +112,15 @@ def check_rejector(events, final_state, provider_id):
     rejections = events_of(events, provider_id, "rejected")
     accepted = [e["lease_id"] for _, e in events_of(events, provider_id, "accepted")]
 
-    results = []
-    if not rejections:
-        results.append(
-            inconclusive(
-                f"{provider_id} rejected an offer", "no rejected event, rejection not tested"
-            )
+    results = [
+        result(
+            f"{provider_id} rejected an offer",
+            bool(rejections),
+            f"{len(rejections)} rejected events"
+            if rejections
+            else "no rejected event: never offered a job, or the reject call failed",
         )
+    ]
     results.append(result(f"{provider_id} accepted no lease", not accepted, f"accepted {accepted}"))
     results.append(provider_active(final_state, provider_id))
 
@@ -189,19 +194,20 @@ def check_liar(events, final_state, provider_id):
     mismatches = [(i, e) for i, e in accepted if e.get("planned_outcome") == "FAILURE"]
     honest = [(i, e) for i, e in accepted if e.get("planned_outcome") == "SUCCESS"]
 
-    results = []
     tested = [
         (i, e)
         for i, e in mismatches
         if reports.get(e["lease_id"], (None, {}))[1].get("reason") == "CAPABILITY_MISMATCH"
     ]
-    if not tested:
-        results.append(
-            inconclusive(
-                f"{provider_id} reported CAPABILITY_MISMATCH",
-                "no mismatch report, retry elsewhere not tested",
-            )
+    results = [
+        result(
+            f"{provider_id} reported CAPABILITY_MISMATCH",
+            bool(tested),
+            f"{len(tested)} mismatch reports"
+            if tested
+            else "no mismatch report: never offered a job it cannot run, or the report failed",
         )
+    ]
     results.append(provider_active(final_state, provider_id))
 
     for _, accept in mismatches:
