@@ -3,7 +3,7 @@
 # node-rejector rejects with LOCAL_BUSY, the lease is REJECTED, the job
 # stays QUEUED with attempt_count unchanged, and node-rejector is added to the
 # job's rejected_provider_ids so it is not offered that job again.
-# node-normal finishes every job, all jobs SUCCEEDED by the end.
+# node-normal finishes every job, all jobs COMPLETED by the end.
 
 providers:
   - name: node-normal
