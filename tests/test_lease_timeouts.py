@@ -135,7 +135,8 @@ def test_execution_deadline_and_retry_budget(store, offset, expired, job_status,
     assert job.last_failure_reason == ("EXECUTION_TIMEOUT" if expired else None)
     assert job.attempt_count == attempts
     assert job.offer_timeout_counts == {}
-    assert job.rejected_provider_ids == set()
+    # A lease that was not renewed in time keeps this Job away from p1.
+    assert job.rejected_provider_ids == ({"p1"} if expired else set())
     assert lease.released_at is None
 
 

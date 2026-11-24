@@ -385,9 +385,10 @@ async def report_lease(
         if request.outcome == LeaseOutcome.SUCCESS and job.status == JobStatus.STARTING:
             raise InvalidJobState(job.job_id, job.status.value, JobStatus.RUNNING.value)
 
-        # Case 9: running the Job again on this Provider would fail the same way.
+        # Case 9: the Provider lacks what the Job needs, or has no disk space left for it.
+        # Running the Job again on this Provider would fail the same way.
         # Only this Job is affected. Other Jobs can still go to this Provider.
-        if request.reason == FailureReason.CAPABILITY_MISMATCH:
+        if request.reason in (FailureReason.CAPABILITY_MISMATCH, FailureReason.DISK_FULL):
             job.rejected_provider_ids.add(lease.provider_id)
 
         # Case 10: SUCCESS -> job COMPLETED.
@@ -546,6 +547,13 @@ async def expire_execution_leases(store: Store, now: datetime, max_attempts: int
                 and lease.expires_at is not None
                 and now >= lease.expires_at
             ):
+                # The Provider stopped renewing, so something on that node is stuck.
+                # Running this Job there again would likely stall the same way.
+                # An old lease must not change its Job, so only the current lease counts.
+                # Check before close_lease clears current_lease_id.
+                job = store.jobs[lease.job_id]
+                if job.current_lease_id == lease.lease_id:
+                    job.rejected_provider_ids.add(lease.provider_id)
                 close_lease(
                     store,
                     lease.lease_id,
