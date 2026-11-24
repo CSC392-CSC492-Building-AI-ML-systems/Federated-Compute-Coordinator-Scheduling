@@ -201,12 +201,13 @@ def test_service_failure_without_a_reason_is_taken():
 
 
 @pytest.mark.parametrize("reason", list(FailureReason), ids=lambda reason: reason.value)
-def test_service_only_capability_mismatch_stops_offers_to_this_provider(reason):
+def test_service_only_node_problems_stop_offers_to_this_provider(reason):
     store, returned = run_report(outcome=LeaseOutcome.FAILURE, reason=reason)
 
-    # The Job still runs again. After a CAPABILITY_MISMATCH, just not on p1.
+    # The Job still runs again. When p1 cannot run it, just not on p1.
     assert returned.job_status is JobStatus.QUEUED
-    expected = {"p1"} if reason is FailureReason.CAPABILITY_MISMATCH else set()
+    node_problems = (FailureReason.CAPABILITY_MISMATCH, FailureReason.DISK_FULL)
+    expected = {"p1"} if reason in node_problems else set()
     assert store.jobs["j1"].rejected_provider_ids == expected
     # Only the Job remembers it. The Provider record is unchanged.
     assert store.providers["p1"] == provider()
