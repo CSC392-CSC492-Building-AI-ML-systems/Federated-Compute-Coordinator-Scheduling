@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from typing import Callable
 
-from coordinator.services import lease_service, provider_service
+from coordinator.services import job_service, lease_service, provider_service
 from coordinator.settings import Settings
 from coordinator.store import Store
 
@@ -23,6 +23,8 @@ async def run_monitor_tick(store: Store, now: datetime, settings: Settings) -> N
         store, now, settings.max_attempts, settings.offer_timeouts_before_exclude
     )
     await lease_service.expire_execution_leases(store, now, settings.max_attempts)
+    # Queue timeout runs last, so an offer that ran out this tick has already freed its Job.
+    await job_service.expire_queued_jobs(store, now, settings.queue_timeout_seconds)
 
 
 async def monitor_loop(store: Store, clock: Callable[[], datetime], settings: Settings) -> None:

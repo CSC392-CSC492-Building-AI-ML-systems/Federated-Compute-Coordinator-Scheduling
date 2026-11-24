@@ -49,6 +49,8 @@ class InternalReason(str, Enum):
     PROVIDER_STALE = "PROVIDER_STALE"
     DRAIN_STARTED = "DRAIN_STARTED"
     DRAIN_RECLAIM = "DRAIN_RECLAIM"
+    # Only ever on a Job. No Provider took it in time, so no lease is involved.
+    QUEUE_TIMEOUT = "QUEUE_TIMEOUT"
 
 
 class LeaseActionRequest(BaseModel):

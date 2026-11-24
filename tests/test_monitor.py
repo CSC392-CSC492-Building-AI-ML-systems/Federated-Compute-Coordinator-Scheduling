@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from coordinator import monitor
 from coordinator.app import create_app
-from coordinator.services import lease_service, provider_service
+from coordinator.services import job_service, lease_service, provider_service
 from coordinator.settings import DEFAULT_CONFIG_PATH, load_settings
 
 NOW = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
@@ -43,10 +43,14 @@ def test_tick_runs_provider_checks_before_lease_timeouts(monkeypatch):
     async def fake_execution(store, now, max_attempts):
         calls.append(("expire_execution_leases", now, max_attempts))
 
+    async def fake_queue(store, now, queue_timeout_seconds):
+        calls.append(("expire_queued_jobs", now, queue_timeout_seconds))
+
     monkeypatch.setattr(provider_service, "expire_heartbeats", fake_expire)
     monkeypatch.setattr(provider_service, "finish_drains", fake_finish)
     monkeypatch.setattr(lease_service, "expire_offers", fake_offers)
     monkeypatch.setattr(lease_service, "expire_execution_leases", fake_execution)
+    monkeypatch.setattr(job_service, "expire_queued_jobs", fake_queue)
 
     asyncio.run(monitor.run_monitor_tick(store=object(), now=NOW, settings=SETTINGS))
 
@@ -56,6 +60,8 @@ def test_tick_runs_provider_checks_before_lease_timeouts(monkeypatch):
         ("finish_drains", NOW, SETTINGS.max_attempts),
         ("expire_offers", NOW, SETTINGS.max_attempts, SETTINGS.offer_timeouts_before_exclude),
         ("expire_execution_leases", NOW, SETTINGS.max_attempts),
+        # Last, so an offer that ran out this tick has already freed its Job.
+        ("expire_queued_jobs", NOW, SETTINGS.queue_timeout_seconds),
     ]
 
 
