@@ -120,6 +120,9 @@ async def collect_final_state(client, events, job_ids):
     }
 
 
+REPORT_STATUSES = ("PASS", "FAIL", "ERROR", "NOT_IMPLEMENTED")
+
+
 def print_results(results):
     """Prints one line per check result, then a summary."""
     print("--- Checks ---")
@@ -127,8 +130,7 @@ def print_results(results):
         detail = f": {r['detail']}" if r["detail"] else ""
         print(f"{r['status']}  {r['check']}{detail}")
     summary = [
-        f"{sum(r['status'] == status for r in results)} {status}"
-        for status in ("PASS", "FAIL", "NOT_IMPLEMENTED")
+        f"{sum(r['status'] == status for r in results)} {status}" for status in REPORT_STATUSES
     ]
     print(", ".join(summary))
 
@@ -141,8 +143,7 @@ def write_report(config_path, events, final_state, results):
         "scenario": Path(config_path).stem,
         "ran_at": datetime.now(timezone.utc).isoformat(),
         "summary": {
-            status: sum(r["status"] == status for r in results)
-            for status in ("PASS", "FAIL", "NOT_IMPLEMENTED")
+            status: sum(r["status"] == status for r in results) for status in REPORT_STATUSES
         },
         "results": results,
         "final_state": final_state,

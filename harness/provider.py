@@ -103,7 +103,11 @@ class FakeProvider:
             return
         self.status = response["status"]
         self.log_event(
-            now, "drain_started", status=self.status, grace_period_seconds=grace_period_seconds
+            now,
+            "drain_started",
+            status=self.status,
+            grace_period_seconds=grace_period_seconds,
+            job_finishes_at=self.job_finishes_at.isoformat() if self.job_finishes_at else None,
         )
 
     async def tick(self, now):

@@ -137,18 +137,41 @@ def test_disk_full_fails_if_node_not_excluded():
 # drain_mid_job checks
 # ==========================================
 
-DRAIN_EVENTS = [
-    event("node-drains", "registered", behavior="drain_mid_job"),
-    event("node-drains", "accepted", lease_id="lease-1", job_id="job-1"),
-    event("node-drains", "drain_started", grace_period_seconds=6),
-]
+
+def drain_events(finishes_at="2026-01-01T00:00:04+00:00", grace_period_seconds=6):
+    return [
+        event("node-drains", "registered", behavior="drain_mid_job"),
+        event("node-drains", "accepted", lease_id="lease-1", job_id="job-1"),
+        event(
+            "node-drains",
+            "drain_started",
+            grace_period_seconds=grace_period_seconds,
+            job_finishes_at=finishes_at,
+        ),
+    ]
 
 
-def drain_state(reclaimed=False):
-    reason = "DRAIN_RECLAIM" if reclaimed else None
-    outcome = None if reclaimed else "SUCCESS"
+def drain_state(reclaimed=False, provider_status="DRAINED"):
+    leases = {
+        "lease-1": {
+            "job_id": "job-1",
+            "provider_id": "node-drains",
+            "status": "REVOKED" if reclaimed else "RELEASED",
+            "outcome": None if reclaimed else "SUCCESS",
+            "reason": "DRAIN_RECLAIM" if reclaimed else None,
+        }
+    }
+    if reclaimed:
+        leases["lease-2"] = {
+            "job_id": "job-1",
+            "provider_id": "node-normal",
+            "status": "RELEASED",
+            "outcome": "SUCCESS",
+            "reason": None,
+        }
     return {
-        "status": {"providers": {"DRAINED": 1}},
+        "status": {"providers": {provider_status: 1}},
+        "providers": {"node-drains": {"status": provider_status}},
         "jobs": {
             "job-1": {
                 "status": "COMPLETED",
@@ -156,25 +179,35 @@ def drain_state(reclaimed=False):
                 "current_lease_id": None,
             }
         },
-        "leases": {
-            "lease-1": {
-                "job_id": "job-1",
-                "status": "REVOKED" if reclaimed else "RELEASED",
-                "outcome": outcome,
-                "reason": reason,
-            }
-        },
+        "leases": leases,
     }
 
 
 def test_drain_meets_grace_passes():
-    results = check_drain_mid_job(DRAIN_EVENTS, drain_state(reclaimed=False))
-    assert all_passed(results)
+    events = drain_events(finishes_at="2026-01-01T00:00:04+00:00", grace_period_seconds=6)
+    assert all_passed(check_drain_mid_job(events, drain_state(reclaimed=False)))
+
+
+def test_drain_meets_grace_fails_if_reclaimed():
+    events = drain_events(finishes_at="2026-01-01T00:00:04+00:00", grace_period_seconds=6)
+    assert not all_passed(check_drain_mid_job(events, drain_state(reclaimed=True)))
 
 
 def test_drain_misses_grace_passes():
-    results = check_drain_mid_job(DRAIN_EVENTS, drain_state(reclaimed=True))
-    assert all_passed(results)
+    events = drain_events(finishes_at="2026-01-01T00:00:10+00:00", grace_period_seconds=6)
+    assert all_passed(check_drain_mid_job(events, drain_state(reclaimed=True)))
+
+
+def test_drain_misses_grace_fails_if_not_reclaimed():
+    events = drain_events(finishes_at="2026-01-01T00:00:10+00:00", grace_period_seconds=6)
+    assert not all_passed(check_drain_mid_job(events, drain_state(reclaimed=False)))
+
+
+def test_drain_fails_if_provider_not_drained():
+    events = drain_events(finishes_at="2026-01-01T00:00:04+00:00", grace_period_seconds=6)
+    state = drain_state(reclaimed=False, provider_status="ACTIVE")
+    failed = [r["check"] for r in check_drain_mid_job(events, state) if r["status"] == "FAIL"]
+    assert "node-drains DRAINED" in failed
 
 
 # ==========================================
@@ -426,7 +459,7 @@ def test_write_report_saves_the_run_next_to_the_scenario(tmp_path):
     assert path == tmp_path / "disappear_report.json"
     report = json.loads(path.read_text())
     assert report["scenario"] == "disappear"
-    assert report["summary"] == {"PASS": 1, "FAIL": 1, "NOT_IMPLEMENTED": 1}
+    assert report["summary"] == {"PASS": 1, "FAIL": 1, "ERROR": 0, "NOT_IMPLEMENTED": 1}
     assert report["results"] == results
     assert report["final_state"] == {"jobs": {}}
     assert report["events"] == events
