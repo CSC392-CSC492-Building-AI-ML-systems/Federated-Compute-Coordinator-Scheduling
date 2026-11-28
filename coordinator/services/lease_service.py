@@ -516,7 +516,8 @@ async def expire_offers(
 ) -> None:
     """Expire unanswered offers and count timeouts for each Job/Provider pair."""
     async with store.lock:
-        for lease in store.leases.values():
+        # Only unfinished leases, so a check does not slow down as history grows.
+        for lease in store.leases.unfinished():
             if lease.status != LeaseStatus.OFFERED or now < lease.offer_deadline:
                 continue
 
@@ -541,7 +542,8 @@ async def expire_offers(
 async def expire_execution_leases(store: Store, now: datetime, max_attempts: int) -> None:
     """Close accepted Leases that were not renewed before their deadline."""
     async with store.lock:
-        for lease in store.leases.values():
+        # Only unfinished leases, so a check does not slow down as history grows.
+        for lease in store.leases.unfinished():
             if (
                 lease.status == LeaseStatus.ACTIVE
                 and lease.expires_at is not None
@@ -588,7 +590,8 @@ async def get_provider_lease_offers(store: Store, provider_id: str) -> ProviderL
             raise ProviderNotFound(provider_id)
 
         offers = []
-        for lease in store.leases.values():
+        # Only this provider's unfinished leases, so a poll does not slow down as history grows.
+        for lease in store.leases.unfinished_for(provider_id):
             if lease.provider_id == provider_id and lease.status == LeaseStatus.OFFERED:
                 job = store.jobs[lease.job_id]
 
