@@ -23,11 +23,12 @@ async def run_matching(now: datetime, store: Store, settings: Settings) -> None:
     """
     assigned_providers = set()
     async with store.lock:
-        for lease in store.leases.values():
+        # Only unfinished leases and jobs, so a tick does not slow down as history grows.
+        for lease in store.leases.unfinished():
             if lease.status == LeaseStatus.OFFERED or lease.status == LeaseStatus.ACTIVE:
                 assigned_providers.add(lease.provider_id)
 
-        for job in store.jobs.values():
+        for job in store.jobs.unfinished():
             if job.status != JobStatus.QUEUED or job.current_lease_id is not None:
                 continue
 

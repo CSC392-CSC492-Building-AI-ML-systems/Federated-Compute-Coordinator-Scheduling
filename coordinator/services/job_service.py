@@ -60,7 +60,8 @@ async def expire_queued_jobs(store: Store, now: datetime, queue_timeout_seconds:
     # 4, the Job waited too long -> FAILED with QUEUE_TIMEOUT
     limit = timedelta(seconds=queue_timeout_seconds)
     async with store.lock:
-        for job in store.jobs.values():
+        # Only unfinished jobs, so a check does not slow down as history grows.
+        for job in store.jobs.unfinished():
             # Case 1: it is already running or done.
             if job.status != JobStatus.QUEUED:
                 continue
